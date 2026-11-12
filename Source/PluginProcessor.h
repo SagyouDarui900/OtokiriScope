@@ -51,6 +51,18 @@ public:
     double getAnalysisSampleRate() const noexcept { return analysisSampleRate.load(); }
     bool isHostPlaying() const noexcept { return hostPlaying.load(); }
 
+    struct PlayheadInfo
+    {
+        bool isPlaying = false;
+        double timeSeconds = 0.0;
+        double bpm = 120.0;
+        int timeSigNumerator = 4;
+        int timeSigDenominator = 4;
+        juce::int64 barNumber = 0;
+        double ppqPosition = 0.0;
+    };
+    PlayheadInfo getPlayheadInfo() const noexcept;
+
 private:
     static constexpr int fftOrder = 12;
     static constexpr int fftSize = 1 << fftOrder; // 4096
@@ -87,6 +99,12 @@ private:
 
     std::atomic<double> analysisSampleRate { 44100.0 };
     std::atomic<bool> hostPlaying { false };
+    std::atomic<double> hostTimeSeconds { 0.0 };
+    std::atomic<double> hostBpm { 120.0 };
+    std::atomic<int> hostTimeSigNum { 4 };
+    std::atomic<int> hostTimeSigDenom { 4 };
+    std::atomic<juce::int64> hostBarNumber { 0 };
+    std::atomic<double> hostPpqPos { 0.0 };
     juce::int64 lastHostSample = 0;
     bool haveHostPosition = false;
 

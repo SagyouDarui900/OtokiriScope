@@ -32,6 +32,19 @@ float OtokirisAudioProcessor::getSpectrumLevel (int index) const noexcept
     return index >= 0 && index < numBands ? spectrumLevel[(size_t) index].load (std::memory_order_relaxed) : 0.0f;
 }
 
+OtokirisAudioProcessor::PlayheadInfo OtokirisAudioProcessor::getPlayheadInfo() const noexcept
+{
+    PlayheadInfo info;
+    info.isPlaying = hostPlaying.load (std::memory_order_relaxed);
+    info.timeSeconds = hostTimeSeconds.load (std::memory_order_relaxed);
+    info.bpm = hostBpm.load (std::memory_order_relaxed);
+    info.timeSigNumerator = hostTimeSigNum.load (std::memory_order_relaxed);
+    info.timeSigDenominator = hostTimeSigDenom.load (std::memory_order_relaxed);
+    info.barNumber = hostBarNumber.load (std::memory_order_relaxed);
+    info.ppqPosition = hostPpqPos.load (std::memory_order_relaxed);
+    return info;
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout OtokirisAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
@@ -354,6 +367,20 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             lastHostSample = currentSample + numSamples;
             haveHostPosition = true;
             isPlaying = playing;
+
+            if (auto seconds = position->getTimeInSeconds())
+                hostTimeSeconds.store (*seconds, std::memory_order_relaxed);
+            if (auto bpmVal = position->getBpm())
+                hostBpm.store (*bpmVal, std::memory_order_relaxed);
+            if (auto sig = position->getTimeSignature())
+            {
+                hostTimeSigNum.store (sig->numerator, std::memory_order_relaxed);
+                hostTimeSigDenom.store (sig->denominator, std::memory_order_relaxed);
+            }
+            if (auto bars = position->getBarCount())
+                hostBarNumber.store (*bars, std::memory_order_relaxed);
+            if (auto ppq = position->getPpqPosition())
+                hostPpqPos.store (*ppq, std::memory_order_relaxed);
         }
     }
 
