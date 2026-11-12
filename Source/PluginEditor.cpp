@@ -4,7 +4,9 @@ namespace
 {
 const auto background = juce::Colour (0xff2f2f2f);
 const auto controlBackground = juce::Colour (0xff3d3d3d);
+const auto statusBarBackground = juce::Colour (0xff262626);
 const auto lightText = juce::Colour (0xffeeeeee);
+const auto mutedText = juce::Colour (0xffaaaaaa);
 const auto scopeBackground = juce::Colour (0xff284953);
 const auto gridColour = juce::Colour (0xff24d28a);
 const auto areaColour = juce::Colour (0xffff0080);
@@ -14,14 +16,15 @@ juce::String text (const char* utf8) { return juce::String::fromUTF8 (utf8); }
 
 juce::Colour valueToHeatmapColour (float v)
 {
-    if (v <= 0.002f)
+    if (v <= 0.003f)
         return scopeBackground;
 
-    const float shaped = std::sqrt (juce::jlimit (0.0f, 1.0f, v));
-    // Hue: 0.55 (Cyan/Blue-Green) down to 0.0 (Red)
-    const float hue = juce::jlimit (0.0f, 0.55f, 0.55f * (1.0f - shaped * 1.15f));
-    const float sat = juce::jlimit (0.55f, 1.0f, 0.55f + shaped * 0.45f);
-    const float bri = juce::jlimit (0.28f, 1.0f, 0.28f + shaped * 0.8f);
+    // Power curve for higher dynamic range and contrast
+    const float shaped = std::pow (juce::jlimit (0.0f, 1.0f, v), 0.65f);
+    // Hue: 0.52 (cyan/green) down to 0.0 (red)
+    const float hue = juce::jlimit (0.0f, 0.52f, 0.52f * (1.0f - shaped * 1.15f));
+    const float sat = juce::jlimit (0.6f, 1.0f, 0.6f + shaped * 0.4f);
+    const float bri = juce::jlimit (0.32f, 1.0f, 0.32f + shaped * 0.75f);
     return juce::Colour::fromHSV (hue, sat, bri, 1.0f);
 }
 }
@@ -57,7 +60,7 @@ void OtokirisAudioProcessorEditor::updateHeatmapImages()
 
     for (int y = 0; y < bands; ++y)
     {
-        // bands: 0 = low freq (bottom), bands-1 = high freq (top)
+        // 0 = low freq (bottom), bands-1 = high freq (top)
         const int bandIdx = bands - 1 - y;
         for (int x = 0; x < slots; ++x)
         {
@@ -90,32 +93,33 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     graphics.setColour (background);
     graphics.fillRect (0, 0, (int) designWidth, (int) designHeight);
 
+    // Header titles
     graphics.setColour (lightText);
     graphics.setFont (17.0f);
-    graphics.drawText (text (u8"定位"), 20, 34, 560, 20, juce::Justification::centred);
-    graphics.drawText (text (u8"奥行き"), 615, 34, 196, 20, juce::Justification::centred);
+    graphics.drawText (text (u8"定位"), 20, 34, 560, 22, juce::Justification::centred);
+    graphics.drawText (text (u8"奥行き"), 615, 34, 196, 22, juce::Justification::centred);
 
     const auto leftArea = juce::Rectangle<int> (20, 68, 560, 340);
     const auto rightArea = juce::Rectangle<int> (615, 68, 196, 340);
 
-    const auto* centreParameter = processor.parameters.getRawParameterValue ("positionCentre");
-    const auto* widthParameter = processor.parameters.getRawParameterValue ("positionWidth");
-    const auto* frequencyCentreParameter = processor.parameters.getRawParameterValue ("frequencyCentre");
-    const auto* frequencyWidthParameter = processor.parameters.getRawParameterValue ("frequencyWidth");
-    const auto* depthCentreParameter = processor.parameters.getRawParameterValue ("depthCentre");
-    const auto* depthWidthParameter = processor.parameters.getRawParameterValue ("depthWidth");
+    const auto* centreParam = processor.parameters.getRawParameterValue ("positionCentre");
+    const auto* widthParam = processor.parameters.getRawParameterValue ("positionWidth");
+    const auto* freqCentreParam = processor.parameters.getRawParameterValue ("frequencyCentre");
+    const auto* freqWidthParam = processor.parameters.getRawParameterValue ("frequencyWidth");
+    const auto* depthCentreParam = processor.parameters.getRawParameterValue ("depthCentre");
+    const auto* depthWidthParam = processor.parameters.getRawParameterValue ("depthWidth");
 
-    const auto centre = centreParameter != nullptr ? centreParameter->load() : 0.0f;
-    const auto width = widthParameter != nullptr ? widthParameter->load() : 0.55f;
-    const auto frequencyCentre = frequencyCentreParameter != nullptr ? frequencyCentreParameter->load() : 0.5f;
-    const auto frequencyWidth = frequencyWidthParameter != nullptr ? frequencyWidthParameter->load() : 0.67f;
-    const auto depthCentre = depthCentreParameter != nullptr ? depthCentreParameter->load() : 0.5f;
-    const auto depthWidth = depthWidthParameter != nullptr ? depthWidthParameter->load() : 0.47f;
+    const auto centre = centreParam != nullptr ? centreParam->load() : 0.0f;
+    const auto width = widthParam != nullptr ? widthParam->load() : 0.55f;
+    const auto freqCentre = freqCentreParam != nullptr ? freqCentreParam->load() : 0.5f;
+    const auto freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 0.67f;
+    const auto depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
+    const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 0.47f;
 
     const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
     const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
 
-    // Lambda to draw a scope (either Pan or Depth)
+    // Draw scope screen
     auto drawScopeScreen = [&] (juce::Rectangle<int> area, bool isDepth,
                                 const juce::Image& heatmapImg,
                                 float c, float w, float fc, float fw)
@@ -167,7 +171,7 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         graphics.setColour (areaColour);
         graphics.drawRect (selRect, 2);
 
-        // Frequency labels
+        // Frequency labels inside screen
         graphics.setColour (juce::Colours::white);
         graphics.setFont (13.0f);
         const auto labelX = area.getX() + 5;
@@ -193,123 +197,151 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         graphics.drawText (isDepth ? "B" : "R", area.getRight() - 46, area.getBottom() - 45, 40, 40,
                            juce::Justification::right);
 
-        // Bottom horizontal scale labels
-        graphics.setColour (juce::Colours::white);
-        graphics.setFont (12.0f);
+        // Scale labels below screen (y = 409, height = 12)
+        graphics.setColour (mutedText);
+        graphics.setFont (11.0f);
         const auto scaleLabels = isDepth ? std::array<const char*, 5> { "0", "25", "50", "75", "100" }
                                          : std::array<const char*, 5> { "-1", "-0.5", "0", "0.5", "1" };
         for (int i = 0; i < 5; ++i)
         {
             graphics.drawText (scaleLabels[(size_t) i],
                                area.getX() + i * (area.getWidth() - 24) / 4 - 4,
-                               area.getBottom() + 3, 32, 16, juce::Justification::centred);
+                               area.getBottom() + 1, 32, 12, juce::Justification::centred);
         }
     };
 
-    drawScopeScreen (leftArea, false, panImage, centre, width, frequencyCentre, frequencyWidth);
-    drawScopeScreen (rightArea, true, depthImage, depthCentre, depthWidth, frequencyCentre, frequencyWidth);
+    drawScopeScreen (leftArea, false, panImage, centre, width, freqCentre, freqWidth);
+    drawScopeScreen (rightArea, true, depthImage, depthCentre, depthWidth, freqCentre, freqWidth);
 
-    // Control panel (y = 420 onwards)
+    // Control panel (y = 422 onwards)
     graphics.setColour (controlBackground);
-    graphics.fillRect (0, 420, (int) designWidth, 192);
+    graphics.fillRect (0, 422, (int) designWidth, 190);
+
+    // Status bar (y = 422 to 440)
+    graphics.setColour (statusBarBackground);
+    graphics.fillRect (0, 422, (int) designWidth, 19);
+    graphics.setColour (juce::Colour (0xff1a1a1a));
+    graphics.drawHorizontalLine (441, 0.0f, designWidth);
+
+    // Formatted frequency and pan text
+    const auto nyquist = processor.getAnalysisSampleRate() * 0.5;
+    const auto lowFraction = juce::jlimit (0.0f, 1.0f, freqCentre - freqWidth * 0.5f);
+    const auto highFraction = juce::jlimit (0.0f, 1.0f, freqCentre + freqWidth * 0.5f);
+    const auto lowHz = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) lowFraction);
+    const auto highHz = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) highFraction);
+
+    const auto formatHz = [] (double hz) -> juce::String
+    {
+        if (hz >= 10000.0)
+            return juce::String (hz / 1000.0, 1) + " kHz";
+        if (hz >= 1000.0)
+            return juce::String (hz / 1000.0, 2) + " kHz";
+        return juce::String ((int) std::round (hz)) + " Hz";
+    };
+
+    const auto formatPan = [] (float p) -> juce::String
+    {
+        if (std::abs (p) < 0.01f)
+            return "Center";
+        if (p < 0.0f)
+            return "L " + juce::String (-p, 2);
+        return "R " + juce::String (p, 2);
+    };
 
     graphics.setColour (lightText);
     graphics.setFont (12.0f);
-    const auto nyquist = processor.getAnalysisSampleRate() * 0.5;
-    const auto lowFraction = juce::jlimit (0.0f, 1.0f, frequencyCentre - frequencyWidth * 0.5f);
-    const auto highFraction = juce::jlimit (0.0f, 1.0f, frequencyCentre + frequencyWidth * 0.5f);
-    const auto lowHz = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) lowFraction);
-    const auto highHz = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) highFraction);
-    const auto formatHz = [] (double hz)
-    {
-        return hz >= 1000.0 ? juce::String (hz / 1000.0, hz >= 10000.0 ? 0 : 1) + " kHz"
-                            : juce::String (hz, 0) + " Hz";
-    };
+    const auto freqStatus = text (u8"周波数: ") + formatHz (lowHz) + " - " + formatHz (highHz)
+                          + " (" + juce::String (freqWidth * 100.0f, 0) + "%)";
+    const auto panStatus = text (u8"定位: ") + formatPan (centre) + " (" + text (u8"幅 ")
+                         + juce::String (width * 100.0f, 0) + "%)";
+    const auto depthStatus = text (u8"奥行: ") + juce::String (depthCentre * 100.0f, 0) + "% ("
+                           + text (u8"幅 ") + juce::String (depthWidth * 100.0f, 0) + "%)";
 
-    graphics.drawText (text (u8"周波数範囲: ") + formatHz (lowHz) + " - " + formatHz (highHz)
-                       + "  (" + juce::String (frequencyWidth * 100.0f, 0) + "%)",
-                       20, 410, 300, 16, juce::Justification::left);
-    graphics.drawText (text (u8"奥行: ") + juce::String (depthCentre * 100.0f, 0)
-                       + "% / " + juce::String (depthWidth * 100.0f, 0) + "%",
-                       615, 410, 196, 16, juce::Justification::left);
+    graphics.drawText (freqStatus + "    |    " + panStatus, 20, 424, 560, 16, juce::Justification::left);
+    graphics.drawText (depthStatus, 615, 424, 196, 16, juce::Justification::left);
 
+    // Button drawing helper
     const auto drawButton = [&graphics] (juce::Rectangle<int> bounds, const juce::String& btnText, bool highlighted = false)
     {
-        graphics.setColour (highlighted ? juce::Colour (0xff777777) : juce::Colour (0xff555555));
+        graphics.setColour (highlighted ? juce::Colour (0xff707070) : juce::Colour (0xff505050));
         graphics.fillRect (bounds);
-        graphics.setColour (juce::Colour (0xff9a9a9a));
+        graphics.setColour (juce::Colour (0xff888888));
         graphics.drawRect (bounds, 1);
         graphics.setColour (lightText);
-        graphics.setFont (14.0f);
+        graphics.setFont (13.0f);
         graphics.drawText (btnText, bounds, juce::Justification::centred);
     };
 
-    drawButton ({ 97, 430, 86, 24 }, text (u8"定位最大化"));
-    drawButton ({ 257, 430, 86, 24 }, text (u8"定位中央"));
-    drawButton ({ 418, 430, 86, 24 }, text (u8"周波数最大化"));
-    drawButton ({ 672, 430, 86, 24 }, text (u8"奥行最大化"));
+    // Preset buttons (y = 445, height = 22)
+    drawButton ({ 97, 445, 86, 22 }, text (u8"定位最大化"));
+    drawButton ({ 257, 445, 86, 22 }, text (u8"定位中央"));
+    drawButton ({ 418, 445, 86, 22 }, text (u8"周波数最大化"));
+    drawButton ({ 672, 445, 86, 22 }, text (u8"奥行最大化"));
 
+    // Labels for sliders
     graphics.setColour (lightText);
-    graphics.setFont (15.0f);
-    graphics.drawText (text (u8"抽出強度"), 20, 467, 90, 20, juce::Justification::left);
-    graphics.drawText (text (u8"境界の滑らかさ"), 20, 499, 110, 20, juce::Justification::left);
-    graphics.drawText (text (u8"残響抑制"), 20, 531, 90, 20, juce::Justification::left);
-    graphics.drawText (text (u8"再生音量"), 450, 467, 78, 20, juce::Justification::left);
-    graphics.drawText (text (u8"定位スケール"), 450, 499, 78, 20, juce::Justification::left);
-    graphics.drawText (text (u8"カラースケール"), 450, 531, 90, 20, juce::Justification::left);
-
-    // Right sliders (Output volume, Position scale, Colour scale)
-    for (const auto y : { 476, 508, 540 })
-    {
-        graphics.setColour (juce::Colour (0xffbcbcbc));
-        graphics.fillRect (530, y - 4, 135, 8);
-        const auto* id = y == 476 ? "outputVolume" : (y == 508 ? "positionScale" : "colourScale");
-        const auto* value = processor.parameters.getRawParameterValue (id);
-        const auto knobX = 530 + (int) std::round ((value != nullptr ? value->load() : 0.5f) * 127.0f);
-        graphics.setColour (juce::Colour (0xff777777));
-        graphics.fillRect (knobX - 4, y - 9, 8, 18);
-    }
+    graphics.setFont (14.0f);
+    graphics.drawText (text (u8"抽出強度"), 20, 477, 90, 18, juce::Justification::left);
+    graphics.drawText (text (u8"境界の滑らかさ"), 20, 509, 110, 18, juce::Justification::left);
+    graphics.drawText (text (u8"残響抑制"), 20, 541, 90, 18, juce::Justification::left);
+    graphics.drawText (text (u8"再生音量"), 450, 477, 78, 18, juce::Justification::left);
+    graphics.drawText (text (u8"定位スケール"), 450, 509, 78, 18, juce::Justification::left);
+    graphics.drawText (text (u8"カラースケール"), 450, 541, 90, 18, juce::Justification::left);
 
     // Left sliders (Extraction amount, Mask softness, Reverb reduction)
-    for (const auto y : { 476, 508, 540 })
+    for (const auto y : { 486, 518, 550 })
     {
-        graphics.setColour (juce::Colour (0xffbcbcbc));
-        graphics.fillRect (110, y - 4, 135, 8);
-        const auto* id = y == 476 ? "extractionAmount" : (y == 508 ? "maskSoftness" : "reverbReduction");
+        graphics.setColour (juce::Colour (0xffbbbbbb));
+        graphics.fillRect (130, y - 3, 135, 6);
+        const auto* id = y == 486 ? "extractionAmount" : (y == 518 ? "maskSoftness" : "reverbReduction");
         const auto* value = processor.parameters.getRawParameterValue (id);
-        const auto knobX = 110 + (int) std::round ((value != nullptr ? value->load() : 0.0f) * 127.0f);
-        graphics.setColour (juce::Colour (0xff777777));
-        graphics.fillRect (knobX - 4, y - 9, 8, 18);
+        const auto knobX = 130 + (int) std::round ((value != nullptr ? value->load() : 0.0f) * 127.0f);
+        graphics.setColour (juce::Colour (0xffe0e0e0));
+        graphics.fillRect (knobX - 4, y - 8, 8, 16);
+    }
+
+    // Right sliders (Output volume, Position scale, Colour scale)
+    for (const auto y : { 486, 518, 550 })
+    {
+        graphics.setColour (juce::Colour (0xffbbbbbb));
+        graphics.fillRect (540, y - 3, 135, 6);
+        const auto* id = y == 486 ? "outputVolume" : (y == 518 ? "positionScale" : "colourScale");
+        const auto* value = processor.parameters.getRawParameterValue (id);
+        const auto knobX = 540 + (int) std::round ((value != nullptr ? value->load() : 0.5f) * 127.0f);
+        graphics.setColour (juce::Colour (0xffe0e0e0));
+        graphics.fillRect (knobX - 4, y - 8, 8, 16);
     }
 
     // Checkboxes
-    for (const auto& item : { std::pair<juce::String, int> { text (u8"定位固定"), 468 },
-                              { text (u8"周波数固定"), 492 },
-                              { text (u8"抽出エリア反転"), 516 },
-                              { text (u8"ビジュアルなし"), 540 } })
+    for (const auto& item : { std::pair<juce::String, int> { text (u8"定位固定"), 476 },
+                              { text (u8"周波数固定"), 500 },
+                              { text (u8"抽出エリア反転"), 524 },
+                              { text (u8"ビジュアルなし"), 548 } })
     {
-        const auto* id = item.second == 468 ? "positionLock"
-                       : item.second == 492 ? "frequencyLock"
-                       : item.second == 516 ? "invertArea" : "noVisual";
+        const auto* id = item.second == 476 ? "positionLock"
+                       : item.second == 500 ? "frequencyLock"
+                       : item.second == 524 ? "invertArea" : "noVisual";
         const auto* value = processor.parameters.getRawParameterValue (id);
         graphics.setColour (value != nullptr && value->load() > 0.5f ? areaColour : juce::Colours::white);
-        graphics.fillRect (706, item.second, 15, 15);
+        graphics.fillRect (706, item.second, 14, 14);
         graphics.setColour (lightText);
-        graphics.drawRect (706, item.second, 15, 15, 1);
-        graphics.drawText (item.first, 727, item.second - 3, 110, 20, juce::Justification::left);
+        graphics.drawRect (706, item.second, 14, 14, 1);
+        graphics.setFont (13.0f);
+        graphics.drawText (item.first, 726, item.second - 2, 110, 18, juce::Justification::left);
     }
 
-    // Bottom transport buttons
-    drawButton ({ 94, 570, 73, 31 }, text (u8"先頭へ"));
-    drawButton ({ 204, 570, 87, 31 }, text (u8"再生 / 停止"));
-    drawButton ({ 328, 570, 73, 31 }, isSlotB ? text (u8"Slot B") : text (u8"Slot A"), isSlotB);
+    // Bottom transport bar (y = 572, height = 28)
+    drawButton ({ 94, 572, 73, 28 }, text (u8"先頭へ"));
+    drawButton ({ 180, 572, 87, 28 }, text (u8"再生 / 停止"));
+    drawButton ({ 280, 572, 75, 28 }, isSlotB ? text (u8"Slot B") : text (u8"Slot A"), isSlotB);
 
     graphics.setColour (lightText);
     graphics.setFont (12.0f);
     const auto rateText = juce::String (processor.getAnalysisSampleRate(), 0) + " Hz";
     const auto transportText = processor.isHostPlaying() ? text (u8"再生中") : text (u8"停止中");
-    graphics.drawText (rateText, 20, 574, 70, 18, juce::Justification::left);
-    graphics.drawText (transportText, 420, 574, 90, 18, juce::Justification::left);
+    graphics.drawText (rateText, 20, 576, 70, 18, juce::Justification::left);
+    graphics.setColour (processor.isHostPlaying() ? juce::Colour (0xff35cfa0) : mutedText);
+    graphics.drawText (transportText, 370, 576, 90, 18, juce::Justification::left);
 }
 
 void OtokirisAudioProcessorEditor::resized()
@@ -332,28 +364,28 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
             parameter->setValueNotifyingHost (parameter->getValue() > 0.5f ? 0.0f : 1.0f);
     };
 
-    // Range preset buttons
-    if (juce::Rectangle<float> (97, 430, 86, 24).contains (point))
+    // Preset buttons (y = 445, height = 22)
+    if (juce::Rectangle<float> (97, 445, 86, 22).contains (point))
         setParameter ("positionWidth", 1.0f);
-    else if (juce::Rectangle<float> (257, 430, 86, 24).contains (point))
+    else if (juce::Rectangle<float> (257, 445, 86, 22).contains (point))
         setParameter ("positionCentre", 0.0f);
-    else if (juce::Rectangle<float> (418, 430, 86, 24).contains (point))
+    else if (juce::Rectangle<float> (418, 445, 86, 22).contains (point))
         setParameter ("frequencyWidth", 1.0f);
-    else if (juce::Rectangle<float> (672, 430, 86, 24).contains (point))
+    else if (juce::Rectangle<float> (672, 445, 86, 22).contains (point))
         setParameter ("depthWidth", 1.0f);
 
-    // Checkboxes
-    else if (juce::Rectangle<float> (706, 468, 150, 18).contains (point))
+    // Checkboxes (y = 476, 500, 524, 548)
+    else if (juce::Rectangle<float> (706, 476, 140, 18).contains (point))
         toggleParameter ("positionLock");
-    else if (juce::Rectangle<float> (706, 492, 150, 18).contains (point))
+    else if (juce::Rectangle<float> (706, 500, 140, 18).contains (point))
         toggleParameter ("frequencyLock");
-    else if (juce::Rectangle<float> (706, 516, 150, 18).contains (point))
+    else if (juce::Rectangle<float> (706, 524, 140, 18).contains (point))
         toggleParameter ("invertArea");
-    else if (juce::Rectangle<float> (706, 540, 150, 18).contains (point))
+    else if (juce::Rectangle<float> (706, 548, 140, 18).contains (point))
         toggleParameter ("noVisual");
 
     // A/B switch button
-    else if (juce::Rectangle<float> (328, 570, 73, 31).contains (point))
+    else if (juce::Rectangle<float> (280, 572, 75, 28).contains (point))
     {
         const auto getVal = [this] (const char* id) -> float
         {
@@ -363,7 +395,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
         if (! isSlotB)
         {
-            // Save to A, load from B if available
             slotA.posCentre = getVal ("positionCentre");
             slotA.posWidth = getVal ("positionWidth");
             slotA.freqCentre = getVal ("frequencyCentre");
@@ -388,7 +419,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         }
         else
         {
-            // Save to B, load from A
             slotB.posCentre = getVal ("positionCentre");
             slotB.posWidth = getVal ("positionWidth");
             slotB.freqCentre = getVal ("frequencyCentre");
@@ -416,17 +446,17 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
     }
 
     // Sliders
-    else if (juce::Rectangle<float> (110, 465, 135, 22).contains (point))
+    else if (juce::Rectangle<float> (130, 476, 135, 20).contains (point))
         activeControl = 4;
-    else if (juce::Rectangle<float> (110, 497, 135, 22).contains (point))
+    else if (juce::Rectangle<float> (130, 508, 135, 20).contains (point))
         activeControl = 5;
-    else if (juce::Rectangle<float> (110, 529, 135, 22).contains (point))
+    else if (juce::Rectangle<float> (130, 540, 135, 20).contains (point))
         activeControl = 6;
-    else if (juce::Rectangle<float> (530, 465, 135, 22).contains (point))
+    else if (juce::Rectangle<float> (540, 476, 135, 20).contains (point))
         activeControl = 1;
-    else if (juce::Rectangle<float> (530, 497, 135, 22).contains (point))
+    else if (juce::Rectangle<float> (540, 508, 135, 20).contains (point))
         activeControl = 2;
-    else if (juce::Rectangle<float> (530, 529, 135, 22).contains (point))
+    else if (juce::Rectangle<float> (540, 540, 135, 20).contains (point))
         activeControl = 3;
     else
         activeControl = 0;
@@ -434,7 +464,7 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
     if (activeControl != 0)
     {
         const auto isAdvanced = activeControl >= 4;
-        const auto sliderX = isAdvanced ? 110.0f : 530.0f;
+        const auto sliderX = isAdvanced ? 130.0f : 540.0f;
         const auto value = juce::jlimit (0.0f, 1.0f, (point.x - sliderX) / 135.0f);
         const auto* id = activeControl == 1 ? "outputVolume"
                       : activeControl == 2 ? "positionScale"
@@ -466,16 +496,16 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
     const auto centre = centreParameter != nullptr ? centreParameter->load() : (activeScope == 1 ? 0.0f : 0.5f);
     const auto width = widthParameter != nullptr ? widthParameter->load() : 0.5f;
-    const auto frequencyCentre = frequencyCentreParameter != nullptr ? frequencyCentreParameter->load() : 0.5f;
-    const auto frequencyWidth = frequencyWidthParameter != nullptr ? frequencyWidthParameter->load() : 0.67f;
+    const auto freqC = frequencyCentreParameter != nullptr ? frequencyCentreParameter->load() : 0.5f;
+    const auto freqW = frequencyWidthParameter != nullptr ? frequencyWidthParameter->load() : 0.67f;
 
     const auto current = activeScope == 1
         ? juce::Rectangle<float> (scope.getCentreX() + centre * scope.getWidth() * 0.5f - width * scope.getWidth() * 0.5f,
-                                  scope.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f) * scope.getHeight(),
-                                  width * scope.getWidth(), frequencyWidth * scope.getHeight())
+                                  scope.getY() + (1.0f - freqC - freqW * 0.5f) * scope.getHeight(),
+                                  width * scope.getWidth(), freqW * scope.getHeight())
         : juce::Rectangle<float> (scope.getX() + centre * scope.getWidth() - width * scope.getWidth() * 0.5f,
-                                  scope.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f) * scope.getHeight(),
-                                  width * scope.getWidth(), frequencyWidth * scope.getHeight());
+                                  scope.getY() + (1.0f - freqC - freqW * 0.5f) * scope.getHeight(),
+                                  width * scope.getWidth(), freqW * scope.getHeight());
 
     const auto margin = 10.0f;
     dragEdges = (std::abs (point.x - current.getX()) <= margin ? 1 : 0)
@@ -504,7 +534,7 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
 
     if (activeControl != 0)
     {
-        const auto sliderX = activeControl >= 4 ? 110.0f : 530.0f;
+        const auto sliderX = activeControl >= 4 ? 130.0f : 540.0f;
         const auto value = juce::jlimit (0.0f, 1.0f, (point.x - sliderX) / 135.0f);
         const auto* id = activeControl == 1 ? "outputVolume"
                       : activeControl == 2 ? "positionScale"
@@ -523,9 +553,12 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
     const auto scope = activeScope == 1 ? juce::Rectangle<float> (20.0f, 68.0f, 560.0f, 340.0f)
                                         : juce::Rectangle<float> (615.0f, 68.0f, 196.0f, 340.0f);
 
+    // Shift key enables fine precision tuning (0.2x drag speed)
+    const float speed = event.mods.isShiftDown() ? 0.2f : 1.0f;
+    const auto deltaX = ((point.x - dragStart.x) / scope.getWidth()) * speed;
+    const auto deltaY = ((point.y - dragStart.y) / scope.getHeight()) * speed;
+
     auto area = dragAreaAtStart;
-    const auto deltaX = (point.x - dragStart.x) / scope.getWidth();
-    const auto deltaY = (point.y - dragStart.y) / scope.getHeight();
 
     if (dragEdges & 1) area.setLeft (area.getX() + deltaX);
     if (dragEdges & 2) area.setRight (area.getRight() + deltaX);
