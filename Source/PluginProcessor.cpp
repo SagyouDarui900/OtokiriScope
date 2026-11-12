@@ -54,9 +54,34 @@ juce::AudioProcessorValueTreeState::ParameterLayout OtokirisAudioProcessor::crea
     return { parameters.begin(), parameters.end() };
 }
 
+void OtokirisAudioProcessor::updateFilterCoefficients (float sampleRate, float lowFreq, float highFreq)
+{
+    constexpr float threshold = 0.5f;
+    if (std::abs (sampleRate - lastFilterSampleRate) < 0.1f
+        && std::abs (lowFreq - lastFilterLow) < threshold
+        && std::abs (highFreq - lastFilterHigh) < threshold)
+    {
+        return;
+    }
+
+    lastFilterSampleRate = sampleRate;
+    lastFilterLow = lowFreq;
+    lastFilterHigh = highFreq;
+
+    auto hpCoeffs = juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, lowFreq, 0.7071f);
+    auto lpCoeffs = juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, highFreq, 0.7071f);
+
+    for (size_t ch = 0; ch < 2; ++ch)
+    {
+        highPassFilters[ch].coefficients = hpCoeffs;
+        lowPassFilters[ch].coefficients = lpCoeffs;
+    }
+}
+
 void OtokirisAudioProcessor::prepareToPlay (double sampleRate, int)
 {
-    analysisSampleRate.store (sampleRate > 0.0 ? sampleRate : 44100.0);
+    const auto sr = sampleRate > 0.0 ? sampleRate : 44100.0;
+    analysisSampleRate.store (sr);
     analysisFifo.fill (0.0f);
     fftData.fill (0.0f);
     analysisFifoIndex = 0;
@@ -65,6 +90,12 @@ void OtokirisAudioProcessor::prepareToPlay (double sampleRate, int)
     hostPlaying.store (false);
     for (auto& level : spectrum)
         level.store (0.0f);
+
+    lastFilterSampleRate = -1.0f;
+    lastFilterLow = -1.0f;
+    lastFilterHigh = -1.0f;
+    updateFilterCoefficients ((float) sr, 20.0f, (float) (sr * 0.49));
+
     for (auto& filter : highPassFilters)
         filter.reset();
     for (auto& filter : lowPassFilters)
@@ -155,31 +186,31 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const auto channelsToProcess = juce::jmin (buffer.getNumChannels(), getTotalNumOutputChannels());
 
     const auto sampleRate = (float) analysisSampleRate.load();
-    const auto frequencyCentre = parameters.getRawParameterValue ("frequencyCentre");
-    const auto frequencyWidth = parameters.getRawParameterValue ("frequencyWidth");
-    const auto centre = frequencyCentre != nullptr ? frequencyCentre->load() : 0.5f;
-    const auto width = frequencyWidth != nullptr ? frequencyWidth->load() : 1.0f;
-    const auto lowNormalised = juce::jlimit (0.0f, 1.0f, centre - width * 0.5f);
-    const auto highNormalised = juce::jlimit (0.0f, 1.0f, centre + width * 0.5f);
+    const auto* freqCentreParam = parameters.getRawParameterValue ("frequencyCentre");
+    const auto* freqWidthParam = parameters.getRawParameterValue ("frequencyWidth");
+    const auto freqCentre = freqCentreParam != nullptr ? freqCentreParam->load() : 0.5f;
+    const auto freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 1.0f;
+    const auto lowNormalised = juce::jlimit (0.0f, 1.0f, freqCentre - freqWidth * 0.5f);
+    const auto highNormalised = juce::jlimit (0.0f, 1.0f, freqCentre + freqWidth * 0.5f);
     const auto nyquist = sampleRate * 0.5;
     const auto lowFrequency = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) lowNormalised);
     const auto highFrequency = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) highNormalised);
     const auto filterLow = juce::jlimit (10.0, nyquist * 0.95, lowFrequency);
     const auto filterHigh = juce::jlimit (filterLow + 20.0, nyquist * 0.98, highFrequency);
-    const auto extractionAmountParameter = parameters.getRawParameterValue ("extractionAmount");
-    const auto maskSoftnessParameter = parameters.getRawParameterValue ("maskSoftness");
-    const auto reverbReductionParameter = parameters.getRawParameterValue ("reverbReduction");
-    const auto extractionAmount = extractionAmountParameter != nullptr ? extractionAmountParameter->load() : 1.0f;
-    const auto maskSoftness = maskSoftnessParameter != nullptr ? maskSoftnessParameter->load() : 0.15f;
-    const auto reverbReduction = reverbReductionParameter != nullptr ? reverbReductionParameter->load() : 0.0f;
+
+    const auto* extractionAmountParam = parameters.getRawParameterValue ("extractionAmount");
+    const auto* maskSoftnessParam = parameters.getRawParameterValue ("maskSoftness");
+    const auto* reverbReductionParam = parameters.getRawParameterValue ("reverbReduction");
+    const auto extractionAmount = extractionAmountParam != nullptr ? extractionAmountParam->load() : 1.0f;
+    const auto maskSoftness = maskSoftnessParam != nullptr ? maskSoftnessParam->load() : 0.15f;
+    const auto reverbReduction = reverbReductionParam != nullptr ? reverbReductionParam->load() : 0.0f;
     const auto bandGain = juce::jlimit (0.0f, 1.0f,
                                         extractionAmount * (1.0f - reverbReduction * 0.35f));
+
+    updateFilterCoefficients (sampleRate, (float) filterLow, (float) filterHigh);
+
     for (int channel = 0; channel < channelsToProcess; ++channel)
     {
-        highPassFilters[(size_t) channel].coefficients = juce::dsp::IIR::Coefficients<float>::makeHighPass (
-            sampleRate, (float) filterLow, 0.7071f);
-        lowPassFilters[(size_t) channel].coefficients = juce::dsp::IIR::Coefficients<float>::makeLowPass (
-            sampleRate, (float) filterHigh, 0.7071f);
         auto* samples = buffer.getWritePointer (channel);
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
@@ -194,34 +225,49 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (channelsToProcess >= 2)
     {
-        const auto* centreParameter = parameters.getRawParameterValue ("positionCentre");
-        const auto* widthParameter = parameters.getRawParameterValue ("positionWidth");
-        const auto* invertParameter = parameters.getRawParameterValue ("invertArea");
-        const auto* depthCentreParameter = parameters.getRawParameterValue ("depthCentre");
-        const auto* depthWidthParameter = parameters.getRawParameterValue ("depthWidth");
-        const auto centre = centreParameter != nullptr ? centreParameter->load() : 0.0f;
-        const auto width = widthParameter != nullptr ? widthParameter->load() : 1.0f;
-        const auto invert = invertParameter != nullptr && invertParameter->load() > 0.5f;
-        juce::ignoreUnused (depthCentreParameter, depthWidthParameter);
+        const auto* panCentreParam = parameters.getRawParameterValue ("positionCentre");
+        const auto* panWidthParam = parameters.getRawParameterValue ("positionWidth");
+        const auto* invertParam = parameters.getRawParameterValue ("invertArea");
+        const auto* depthCentreParam = parameters.getRawParameterValue ("depthCentre");
+        const auto* depthWidthParam = parameters.getRawParameterValue ("depthWidth");
+
+        const auto panCentre = panCentreParam != nullptr ? panCentreParam->load() : 0.0f;
+        const auto panWidth = panWidthParam != nullptr ? panWidthParam->load() : 1.0f;
+        const auto invert = invertParam != nullptr && invertParam->load() > 0.5f;
+        const auto depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
+        const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 1.0f;
+
+        const auto softness = juce::jmax (0.001f, maskSoftness);
         auto* left = buffer.getWritePointer (0);
         auto* right = buffer.getWritePointer (1);
+
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
-            const auto leftLevel = std::abs (left[sample]);
-            const auto rightLevel = std::abs (right[sample]);
+            const auto l = left[sample];
+            const auto r = right[sample];
+            const auto leftLevel = std::abs (l);
+            const auto rightLevel = std::abs (r);
             const auto total = leftLevel + rightLevel + 1.0e-6f;
             const auto pan = (rightLevel - leftLevel) / total;
-            const auto distance = std::abs (pan - centre);
-            const auto selected = distance <= width * 0.5f;
-            const auto edgeDistance = std::abs (distance - width * 0.5f);
-            const auto softness = juce::jmax (0.001f, maskSoftness);
-            auto mask = juce::jlimit (0.0f, 1.0f, (width * 0.5f - distance) / softness);
+
+            // Pan mask
+            const auto panDist = std::abs (pan - panCentre);
+            const auto panMask = juce::jlimit (0.0f, 1.0f, (panWidth * 0.5f - panDist) / softness + 0.5f);
+
+            // Depth mask: Diffuseness / Front-Back based on mid/side ratio
+            const auto midLevel = std::abs (l + r) * 0.5f;
+            const auto sideLevel = std::abs (l - r) * 0.5f;
+            const auto depthVal = sideLevel / (midLevel + sideLevel + 1.0e-6f); // 0 (dry/front) to 1 (diffuse/back)
+            const auto depthDist = std::abs (depthVal - depthCentre);
+            const auto depthMask = juce::jlimit (0.0f, 1.0f, (depthWidth * 0.5f - depthDist) / softness + 0.5f);
+
+            auto combinedMask = panMask * depthMask;
             if (invert)
-                mask = 1.0f - mask;
-            mask = 1.0f - extractionAmount + extractionAmount * mask;
-            juce::ignoreUnused (edgeDistance);
-            left[sample] *= mask;
-            right[sample] *= mask;
+                combinedMask = 1.0f - combinedMask;
+
+            const auto finalGain = (1.0f - extractionAmount) + extractionAmount * combinedMask;
+            left[sample] *= finalGain;
+            right[sample] *= finalGain;
         }
     }
 

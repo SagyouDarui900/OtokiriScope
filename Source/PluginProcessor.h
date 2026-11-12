@@ -55,6 +55,11 @@ private:
         juce::dsp::WindowingFunction<float>::hann, false };
     std::array<juce::dsp::IIR::Filter<float>, 2> highPassFilters;
     std::array<juce::dsp::IIR::Filter<float>, 2> lowPassFilters;
+    float lastFilterLow = -1.0f;
+    float lastFilterHigh = -1.0f;
+    float lastFilterSampleRate = -1.0f;
+
+    void updateFilterCoefficients (float sampleRate, float lowFreq, float highFreq);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OtokirisAudioProcessor)
 };
