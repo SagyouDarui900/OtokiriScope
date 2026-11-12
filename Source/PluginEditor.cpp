@@ -7,7 +7,7 @@ const auto controlBackground = juce::Colour (0xff3d3d3d);
 const auto statusBarBackground = juce::Colour (0xff262626);
 const auto lightText = juce::Colour (0xffeeeeee);
 const auto mutedText = juce::Colour (0xffaaaaaa);
-const auto scopeBackground = juce::Colour (0xff284953);
+const auto scopeBackground = juce::Colour (0xff152228);
 const auto gridColour = juce::Colour (0xff24d28a);
 const auto areaColour = juce::Colour (0xffff0080);
 const auto areaFill = juce::Colour (0xff00005d);
@@ -16,16 +16,38 @@ juce::String text (const char* utf8) { return juce::String::fromUTF8 (utf8); }
 
 juce::Colour valueToHeatmapColour (float v)
 {
-    if (v <= 0.003f)
+    // High-contrast noise floor gate: completely eliminates blurry background fog
+    if (v <= 0.04f)
         return scopeBackground;
 
-    // Power curve for higher dynamic range and contrast
-    const float shaped = std::pow (juce::jlimit (0.0f, 1.0f, v), 0.65f);
-    // Hue: 0.52 (cyan/green) down to 0.0 (red)
-    const float hue = juce::jlimit (0.0f, 0.52f, 0.52f * (1.0f - shaped * 1.15f));
-    const float sat = juce::jlimit (0.6f, 1.0f, 0.6f + shaped * 0.4f);
-    const float bri = juce::jlimit (0.32f, 1.0f, 0.32f + shaped * 0.75f);
-    return juce::Colour::fromHSV (hue, sat, bri, 1.0f);
+    const float norm = juce::jlimit (0.0f, 1.0f, (v - 0.04f) / 0.96f);
+    // Perceptual gamma shaping for maximum punch and crispness
+    const float shaped = std::pow (norm, 0.72f);
+
+    if (shaped < 0.22f)
+    {
+        // Low harmonics: subtle deep cyan
+        const float t = shaped / 0.22f;
+        return scopeBackground.interpolatedWith (juce::Colour (0xff00c8b0), t * 0.85f);
+    }
+    else if (shaped < 0.50f)
+    {
+        // Body: bright cyan/green to luminous yellow
+        const float t = (shaped - 0.22f) / 0.28f;
+        return juce::Colour (0xff00c8b0).interpolatedWith (juce::Colour (0xffffff00), t);
+    }
+    else if (shaped < 0.80f)
+    {
+        // Strong: luminous yellow to intense hot orange-red
+        const float t = (shaped - 0.50f) / 0.30f;
+        return juce::Colour (0xffffff00).interpolatedWith (juce::Colour (0xffff2200), t);
+    }
+    else
+    {
+        // Peaks & fundamentals: fiery red to blazing pure white
+        const float t = (shaped - 0.80f) / 0.20f;
+        return juce::Colour (0xffff2200).interpolatedWith (juce::Colours::white, t);
+    }
 }
 }
 
@@ -53,7 +75,7 @@ void OtokirisAudioProcessorEditor::updateHeatmapImages()
 
     const auto* colourScaleParam = processor.parameters.getRawParameterValue ("colourScale");
     const float colourScale = colourScaleParam != nullptr ? colourScaleParam->load() : 0.5f;
-    const float colourGain = std::pow (2.0f, (colourScale - 0.5f) * 4.0f);
+    const float colourGain = std::pow (3.0f, (colourScale - 0.5f) * 3.5f);
 
     juce::Image::BitmapData panPixels (panImage, juce::Image::BitmapData::writeOnly);
     juce::Image::BitmapData depthPixels (depthImage, juce::Image::BitmapData::writeOnly);
