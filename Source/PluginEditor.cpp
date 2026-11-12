@@ -559,40 +559,93 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
             parameter->setValueNotifyingHost (parameter->getValue() > 0.5f ? 0.0f : 1.0f);
     };
 
+    const auto getParamVal = [this] (const char* id) -> float
+    {
+        if (auto* parameter = processor.parameters.getRawParameterValue (id))
+            return parameter->load();
+        return 0.0f;
+    };
+
     // Preset buttons (y = 445, height = 22)
     if (juce::Rectangle<float> (97, 445, 86, 22).contains (point))
     {
-        setParameter ("positionCentre", 0.0f);
-        setParameter ("positionWidth", 1.0f);
-        positionArea.setX (0.0f);
-        positionArea.setWidth (1.0f);
+        const float currentW = getParamVal ("positionWidth");
+        const float currentC = getParamVal ("positionCentre");
+        if (currentW >= 0.98f)
+        {
+            setParameter ("positionCentre", savedPositionCentre);
+            setParameter ("positionWidth", savedPositionWidth);
+            positionArea.setX (0.5f + savedPositionCentre * 0.5f - savedPositionWidth * 0.5f);
+            positionArea.setWidth (savedPositionWidth);
+        }
+        else
+        {
+            savedPositionCentre = currentC;
+            savedPositionWidth = currentW;
+            setParameter ("positionCentre", 0.0f);
+            setParameter ("positionWidth", 1.0f);
+            positionArea.setX (0.0f);
+            positionArea.setWidth (1.0f);
+        }
         repaint();
         return;
     }
     else if (juce::Rectangle<float> (257, 445, 86, 22).contains (point))
     {
         setParameter ("positionCentre", 0.0f);
-        positionArea.setX (0.5f - positionArea.getWidth() * 0.5f);
+        const float currentW = getParamVal ("positionWidth");
+        positionArea.setX (0.5f - currentW * 0.5f);
         repaint();
         return;
     }
     else if (juce::Rectangle<float> (418, 445, 86, 22).contains (point))
     {
-        setParameter ("frequencyCentre", 0.5f);
-        setParameter ("frequencyWidth", 1.0f);
-        positionArea.setY (0.0f);
-        positionArea.setHeight (1.0f);
-        depthArea.setY (0.0f);
-        depthArea.setHeight (1.0f);
+        const float currentW = getParamVal ("frequencyWidth");
+        const float currentC = getParamVal ("frequencyCentre");
+        if (currentW >= 0.98f)
+        {
+            setParameter ("frequencyCentre", savedFreqCentre);
+            setParameter ("frequencyWidth", savedFreqWidth);
+            const float y = 1.0f - savedFreqCentre - savedFreqWidth * 0.5f;
+            positionArea.setY (y);
+            positionArea.setHeight (savedFreqWidth);
+            depthArea.setY (y);
+            depthArea.setHeight (savedFreqWidth);
+        }
+        else
+        {
+            savedFreqCentre = currentC;
+            savedFreqWidth = currentW;
+            setParameter ("frequencyCentre", 0.5f);
+            setParameter ("frequencyWidth", 1.0f);
+            positionArea.setY (0.0f);
+            positionArea.setHeight (1.0f);
+            depthArea.setY (0.0f);
+            depthArea.setHeight (1.0f);
+        }
         repaint();
         return;
     }
     else if (juce::Rectangle<float> (672, 445, 86, 22).contains (point))
     {
-        setParameter ("depthCentre", 0.5f);
-        setParameter ("depthWidth", 1.0f);
-        depthArea.setX (0.0f);
-        depthArea.setWidth (1.0f);
+        const float currentW = getParamVal ("depthWidth");
+        const float currentC = getParamVal ("depthCentre");
+        if (currentW >= 0.98f)
+        {
+            setParameter ("depthCentre", savedDepthCentre);
+            setParameter ("depthWidth", savedDepthWidth);
+            depthArea.setX (savedDepthCentre - savedDepthWidth * 0.5f);
+            depthArea.setWidth (savedDepthWidth);
+        }
+        else
+        {
+            savedDepthCentre = currentC;
+            savedDepthWidth = currentW;
+            setParameter ("depthCentre", 0.5f);
+            setParameter ("depthWidth", 1.0f);
+            depthArea.setX (0.0f);
+            depthArea.setWidth (1.0f);
+        }
         repaint();
         return;
     }

@@ -28,9 +28,15 @@ private:
 
     bool draggingPosition = false;
     juce::Rectangle<float> positionArea { 0.25f, 0.18f, 0.55f, 0.67f };
-    juce::Rectangle<float> depthArea { 0.01f, 0.18f, 0.47f, 0.67f };
+    juce::Rectangle<float> depthArea { 0.0f, 0.18f, 1.0f, 0.67f };
     juce::Rectangle<float> savedPositionArea;
     juce::Rectangle<float> savedDepthArea;
+    float savedPositionCentre = 0.0f;
+    float savedPositionWidth = 0.55f;
+    float savedFreqCentre = 0.5f;
+    float savedFreqWidth = 0.67f;
+    float savedDepthCentre = 0.5f;
+    float savedDepthWidth = 0.47f;
     juce::Point<float> dragStart;
     juce::Rectangle<float> dragAreaAtStart;
     int activeScope = 0;
@@ -45,7 +51,7 @@ private:
         float freqCentre = 0.5f;
         float freqWidth = 0.67f;
         float depthCentre = 0.5f;
-        float depthWidth = 0.47f;
+        float depthWidth = 1.0f;
         bool invert = false;
         bool hasValue = false;
     };
