@@ -202,11 +202,11 @@ void OtokirisAudioProcessor::processSTFTFrame()
     const bool updateHeatmap = hostPlaying.load (std::memory_order_relaxed);
     if (updateHeatmap)
     {
-        // Decay accumulator for smooth heatmap visuals
+        // Decay accumulator faster (0.60f) for crisp, responsive transients and less blurry smear
         for (float& v : currentAccumulator.pan)
-            v *= 0.72f;
+            v *= 0.60f;
         for (float& v : currentAccumulator.depth)
-            v *= 0.72f;
+            v *= 0.60f;
     }
 
     std::array<float, numBands> currentBandEnergy {};
@@ -251,11 +251,12 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float magSide = std::hypot (realSide, imagSide);
         const float depth = magSide / (magMid + magSide + 1e-6f); // 0 (direct/front) to 1 (diffuse/back)
 
-        // Visual Heatmap accumulation
+        // Visual Heatmap accumulation with dynamic log-compression for punchy, crisp visuals
         const auto& bInfo = binMap[(size_t) k];
         const int band = bInfo.band;
         const float avgMag = 0.5f * (magL + magR);
-        const float visualMag = juce::jlimit (0.0f, 1.0f, avgMag / 32.0f);
+        // Log-perceptual compression: reveals quiet harmonics without washing out loud peaks
+        const float visualMag = juce::jlimit (0.0f, 1.0f, std::log1pf (avgMag * 15.0f) / 4.5f);
 
         if (updateHeatmap)
         {

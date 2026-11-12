@@ -37,7 +37,7 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     static constexpr int numBands = 128;
-    static constexpr int numSlots = 64;
+    static constexpr int numSlots = 128;
 
     struct HeatmapGrid
     {
