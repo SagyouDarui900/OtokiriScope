@@ -230,8 +230,10 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     const auto lowHz = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) lowFraction);
     const auto highHz = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) highFraction);
 
-    const auto formatHz = [] (double hz) -> juce::String
+    const auto formatHz = [nyquist] (double hz) -> juce::String
     {
+        if (hz >= nyquist - 60.0)
+            return juce::String (nyquist / 1000.0, 1) + " kHz";
         if (hz >= 10000.0)
             return juce::String (hz / 1000.0, 1) + " kHz";
         if (hz >= 1000.0)
@@ -464,7 +466,39 @@ void OtokirisAudioProcessorEditor::applyPreset (int presetId)
                 p->setValueNotifyingHost (0.0f);
             break;
         }
-        case 7: // Reset All
+        case 7: // High Arpeggio (1.2kHz - Nyquist)
+        {
+            const float low = hzToNorm (1200.0);
+            const float high = 1.0f; // up to Nyquist
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 1.0f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.5f);
+            setParam ("depthWidth", 1.0f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            positionArea = { 0.0f, 0.0f, 1.0f, high - low };
+            depthArea = { 0.0f, 0.0f, 1.0f, high - low };
+            break;
+        }
+        case 8: // Ultra High / Air (3.5kHz - Nyquist)
+        {
+            const float low = hzToNorm (3500.0);
+            const float high = 1.0f; // up to Nyquist
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 1.0f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.5f);
+            setParam ("depthWidth", 1.0f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            positionArea = { 0.0f, 0.0f, 1.0f, high - low };
+            depthArea = { 0.0f, 0.0f, 1.0f, high - low };
+            break;
+        }
+        case 9: // Reset All (Full spectrum & full pan)
         {
             setParam ("positionCentre", 0.0f);
             setParam ("positionWidth", 1.0f);
@@ -474,6 +508,8 @@ void OtokirisAudioProcessorEditor::applyPreset (int presetId)
             setParam ("depthWidth", 1.0f);
             if (auto* p = processor.parameters.getParameter ("invertArea"))
                 p->setValueNotifyingHost (0.0f);
+            positionArea = { 0.0f, 0.0f, 1.0f, 1.0f };
+            depthArea = { 0.0f, 0.0f, 1.0f, 1.0f };
             break;
         }
         default:
@@ -500,13 +536,41 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
     // Preset buttons (y = 445, height = 22)
     if (juce::Rectangle<float> (97, 445, 86, 22).contains (point))
-        setParameter ("positionWidth", 1.0f);
-    else if (juce::Rectangle<float> (257, 445, 86, 22).contains (point))
+    {
         setParameter ("positionCentre", 0.0f);
+        setParameter ("positionWidth", 1.0f);
+        positionArea.setX (0.0f);
+        positionArea.setWidth (1.0f);
+        repaint();
+        return;
+    }
+    else if (juce::Rectangle<float> (257, 445, 86, 22).contains (point))
+    {
+        setParameter ("positionCentre", 0.0f);
+        positionArea.setX (0.5f - positionArea.getWidth() * 0.5f);
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (418, 445, 86, 22).contains (point))
+    {
+        setParameter ("frequencyCentre", 0.5f);
         setParameter ("frequencyWidth", 1.0f);
+        positionArea.setY (0.0f);
+        positionArea.setHeight (1.0f);
+        depthArea.setY (0.0f);
+        depthArea.setHeight (1.0f);
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (672, 445, 86, 22).contains (point))
+    {
+        setParameter ("depthCentre", 0.5f);
         setParameter ("depthWidth", 1.0f);
+        depthArea.setX (0.0f);
+        depthArea.setWidth (1.0f);
+        repaint();
+        return;
+    }
 
     // Checkboxes (y = 476, 500, 524, 548)
     else if (juce::Rectangle<float> (706, 476, 140, 18).contains (point))
@@ -589,8 +653,10 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         menu.addItem (4, text (u8"4. ギター L (Left 150Hz-6.5kHz)"));
         menu.addItem (5, text (u8"5. ギター R (Right 150Hz-6.5kHz)"));
         menu.addItem (6, text (u8"6. ドラム / スネア (120Hz-12kHz)"));
+        menu.addItem (7, text (u8"7. 高音 / アルペジオ (1.2kHz-Nyquist)"));
+        menu.addItem (8, text (u8"8. 超高音 / エアー感 (3.5kHz-Nyquist)"));
         menu.addSeparator();
-        menu.addItem (7, text (u8"7. 全体リセット (All-Pass)"));
+        menu.addItem (9, text (u8"9. 全体リセット (All-Pass)"));
         menu.showMenuAsync (juce::PopupMenu::Options(), [this] (int result) {
             if (result > 0)
                 applyPreset (result);
@@ -728,6 +794,23 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
             area.setY (dragAreaAtStart.getY());
 
     area = area.constrainedWithin (juce::Rectangle<float> (0.0f, 0.0f, 1.0f, 1.0f));
+
+    // Magnetic edge snapping for easy boundary / Nyquist selection
+    if (area.getY() < 0.02f)
+    {
+        area.setHeight (area.getHeight() + area.getY());
+        area.setY (0.0f);
+    }
+    if (area.getBottom() > 0.98f)
+        area.setBottom (1.0f);
+    if (area.getX() < 0.02f)
+    {
+        area.setWidth (area.getWidth() + area.getX());
+        area.setX (0.0f);
+    }
+    if (area.getRight() > 0.98f)
+        area.setRight (1.0f);
+
     if (activeScope == 1)
         positionArea = area;
     else
