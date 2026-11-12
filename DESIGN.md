@@ -137,7 +137,7 @@ pan = (abs(right) - abs(left)) / (abs(left) + abs(right) + epsilon)
 | `frequencyCentre` | 0～1 | 0.5 | 周波数中心 |
 | `frequencyWidth` | 0.02～1 | 0.67 | 周波数幅 |
 | `depthCentre` | 0～1 | 0.5 | 奥行き中心 |
-| `depthWidth` | 0.02～1 | 0.47 | 奥行き幅 |
+| `depthWidth` | 0.02～1 | 1 | 奥行き幅（全奥行き通過初期値） |
 | `positionLock` | bool | false | 定位方向の移動・幅変更を制限 |
 | `frequencyLock` | bool | false | 周波数方向の移動・幅変更を制限 |
 | `invertArea` | bool | false | 抽出範囲を反転 |
