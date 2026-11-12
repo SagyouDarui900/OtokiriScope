@@ -199,11 +199,15 @@ void OtokirisAudioProcessor::processSTFTFrame()
     const bool invert = invertParam != nullptr && invertParam->load() > 0.5f;
     const float reverbRed = reverbRedParam != nullptr ? reverbRedParam->load() : 0.0f;
 
-    // Decay accumulator for smooth heatmap visuals
-    for (float& v : currentAccumulator.pan)
-        v *= 0.72f;
-    for (float& v : currentAccumulator.depth)
-        v *= 0.72f;
+    const bool updateHeatmap = hostPlaying.load (std::memory_order_relaxed);
+    if (updateHeatmap)
+    {
+        // Decay accumulator for smooth heatmap visuals
+        for (float& v : currentAccumulator.pan)
+            v *= 0.72f;
+        for (float& v : currentAccumulator.depth)
+            v *= 0.72f;
+    }
 
     std::array<float, numBands> currentBandEnergy {};
 
@@ -253,15 +257,18 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float avgMag = 0.5f * (magL + magR);
         const float visualMag = juce::jlimit (0.0f, 1.0f, avgMag / 32.0f);
 
-        currentBandEnergy[(size_t) band] = juce::jmax (currentBandEnergy[(size_t) band], visualMag);
+        if (updateHeatmap)
+        {
+            currentBandEnergy[(size_t) band] = juce::jmax (currentBandEnergy[(size_t) band], visualMag);
 
-        const int panSlot = juce::jlimit (0, numSlots - 1, (int) std::round ((pan + 1.0f) * 0.5f * (numSlots - 1)));
-        const int depthSlot = juce::jlimit (0, numSlots - 1, (int) std::round (depth * (numSlots - 1)));
-        const size_t panIdx = (size_t) (band * numSlots + panSlot);
-        const size_t depthIdx = (size_t) (band * numSlots + depthSlot);
+            const int panSlot = juce::jlimit (0, numSlots - 1, (int) std::round ((pan + 1.0f) * 0.5f * (numSlots - 1)));
+            const int depthSlot = juce::jlimit (0, numSlots - 1, (int) std::round (depth * (numSlots - 1)));
+            const size_t panIdx = (size_t) (band * numSlots + panSlot);
+            const size_t depthIdx = (size_t) (band * numSlots + depthSlot);
 
-        currentAccumulator.pan[panIdx] = juce::jmax (currentAccumulator.pan[panIdx], visualMag);
-        currentAccumulator.depth[depthIdx] = juce::jmax (currentAccumulator.depth[depthIdx], visualMag);
+            currentAccumulator.pan[panIdx] = juce::jmax (currentAccumulator.pan[panIdx], visualMag);
+            currentAccumulator.depth[depthIdx] = juce::jmax (currentAccumulator.depth[depthIdx], visualMag);
+        }
 
         // STFT Spectral Mask calculation
         const float logPos = bInfo.logPos;
@@ -310,14 +317,16 @@ void OtokirisAudioProcessor::processSTFTFrame()
         }
     }
 
-    // Update spectrumLevel array for single-band meter access
-    for (size_t b = 0; b < numBands; ++b)
-        spectrumLevel[b].store (currentBandEnergy[b], std::memory_order_relaxed);
+    // Update spectrumLevel array for single-band meter access and swap heatmap
+    if (updateHeatmap)
+    {
+        for (size_t b = 0; b < numBands; ++b)
+            spectrumLevel[b].store (currentBandEnergy[b], std::memory_order_relaxed);
 
-    // Swap heatmap buffer for UI thread
-    const int nextIdx = 1 - activeGridIndex.load (std::memory_order_relaxed);
-    heatmapGrids[(size_t) nextIdx] = currentAccumulator;
-    activeGridIndex.store (nextIdx, std::memory_order_release);
+        const int nextIdx = 1 - activeGridIndex.load (std::memory_order_relaxed);
+        heatmapGrids[(size_t) nextIdx] = currentAccumulator;
+        activeGridIndex.store (nextIdx, std::memory_order_release);
+    }
 
     // Inverse STFT
     fft.performRealOnlyInverseTransform (leftFFTData.data());
@@ -348,12 +357,12 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (numSamples <= 0)
         return;
 
-    bool isPlaying = true;
+    bool isPlaying = isNonRealtime();
     if (auto* hostPlayHead = getPlayHead())
     {
         if (auto position = hostPlayHead->getPosition())
         {
-            const auto playing = position->getIsPlaying();
+            const auto playing = position->getIsPlaying() || isNonRealtime();
             const auto wasPlaying = hostPlaying.load();
             hostPlaying.store (playing);
 
@@ -403,13 +412,10 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         inputFifo[1][(size_t) fifoWritePos] = rightIn[s];
         fifoWritePos = (fifoWritePos + 1) % fftSize;
 
-        if (isPlaying)
+        if (++samplesSinceLastHop >= hopSize)
         {
-            if (++samplesSinceLastHop >= hopSize)
-            {
-                samplesSinceLastHop = 0;
-                processSTFTFrame();
-            }
+            samplesSinceLastHop = 0;
+            processSTFTFrame();
         }
 
         // Pull processed sample from output overlap-add buffer
@@ -420,9 +426,16 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         outputOlaBuffer[1][(size_t) olaReadPos] = 0.0f;
         olaReadPos = (olaReadPos + 1) % olaBufferSize;
 
-        leftOut[s] = outL;
         if (rightOut != nullptr)
+        {
+            leftOut[s] = outL;
             rightOut[s] = outR;
+        }
+        else
+        {
+            // Mono output mixdown
+            leftOut[s] = (outL + outR) * 0.5f;
+        }
     }
 }
 
