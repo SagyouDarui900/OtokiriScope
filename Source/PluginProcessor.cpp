@@ -74,6 +74,7 @@ void OtokirisAudioProcessor::updateBinMapping (double sampleRate)
 {
     const int numBins = fftSize / 2 + 1;
     binMap.resize ((size_t) numBins);
+    smoothedMaskGain.assign ((size_t) numBins, 1.0f);
     const double nyquist = sampleRate * 0.5;
     const double logMin = std::log (20.0);
     const double logMax = std::log (juce::jmax (20.0, nyquist));
@@ -110,6 +111,7 @@ void OtokirisAudioProcessor::resetSTFTBuffers()
     }
     currentAccumulator.pan.fill (0.0f);
     currentAccumulator.depth.fill (0.0f);
+    smoothedMaskGain.assign ((size_t) (fftSize / 2 + 1), 1.0f);
     for (auto& lvl : spectrumLevel)
         lvl.store (0.0f);
 }
@@ -267,7 +269,11 @@ void OtokirisAudioProcessor::processSTFTFrame()
         if (invert)
             mask = 1.0f - mask;
 
-        const float binGain = (1.0f - extAmount) + extAmount * mask;
+        const float targetGain = (1.0f - extAmount) + extAmount * mask;
+        float& prevGain = smoothedMaskGain[(size_t) k];
+        const float coeff = targetGain > prevGain ? 0.65f : 0.40f;
+        prevGain += coeff * (targetGain - prevGain);
+        const float binGain = prevGain;
 
         // Apply gain to complex spectrum
         if (k == 0)
