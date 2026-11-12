@@ -54,6 +54,7 @@ private:
     bool isSlotB = false;
 
     void updateHeatmapImages();
+    void applyPreset (int presetId);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OtokirisAudioProcessorEditor)
 };

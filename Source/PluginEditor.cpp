@@ -334,18 +334,152 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     drawButton ({ 94, 572, 73, 28 }, text (u8"先頭へ"));
     drawButton ({ 180, 572, 87, 28 }, text (u8"再生 / 停止"));
     drawButton ({ 280, 572, 75, 28 }, isSlotB ? text (u8"Slot B") : text (u8"Slot A"), isSlotB);
+    drawButton ({ 368, 572, 95, 28 }, text (u8"プリセット ▼"));
+
+    const auto playInfo = processor.getPlayheadInfo();
+    const auto rateText = juce::String (processor.getAnalysisSampleRate(), 0) + " Hz";
+
+    const int totalSecs = (int) playInfo.timeSeconds;
+    const int mins = totalSecs / 60;
+    const double secs = playInfo.timeSeconds - mins * 60;
+    const auto timeText = juce::String::formatted ("%02d:%04.1f", mins, secs);
+    const auto bpmText = juce::String (playInfo.bpm, 1) + " BPM ("
+                       + juce::String (playInfo.timeSigNumerator) + "/"
+                       + juce::String (playInfo.timeSigDenominator) + ")";
+    const auto transportText = playInfo.isPlaying ? text (u8"再生中") : text (u8"停止中");
 
     graphics.setColour (lightText);
     graphics.setFont (12.0f);
-    const auto rateText = juce::String (processor.getAnalysisSampleRate(), 0) + " Hz";
-    const auto transportText = processor.isHostPlaying() ? text (u8"再生中") : text (u8"停止中");
     graphics.drawText (rateText, 20, 576, 70, 18, juce::Justification::left);
-    graphics.setColour (processor.isHostPlaying() ? juce::Colour (0xff35cfa0) : mutedText);
-    graphics.drawText (transportText, 370, 576, 90, 18, juce::Justification::left);
+
+    // Host timeline & tempo status
+    const auto hostInfoText = bpmText + "  |  " + timeText;
+    graphics.drawText (hostInfoText, 475, 576, 240, 18, juce::Justification::left);
+    graphics.setColour (playInfo.isPlaying ? juce::Colour (0xff35cfa0) : mutedText);
+    graphics.drawText (transportText, 725, 576, 80, 18, juce::Justification::right);
 }
 
 void OtokirisAudioProcessorEditor::resized()
 {
+}
+
+void OtokirisAudioProcessorEditor::applyPreset (int presetId)
+{
+    const double nyquist = processor.getAnalysisSampleRate() * 0.5;
+    const auto hzToNorm = [nyquist] (double hz) -> float
+    {
+        return juce::jlimit (0.0f, 1.0f, (float) (std::log (juce::jmax (20.0, hz) / 20.0)
+                                                  / std::log (juce::jmax (20.0, nyquist) / 20.0)));
+    };
+
+    const auto setParam = [this] (const char* id, float value)
+    {
+        if (auto* parameter = processor.parameters.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+    };
+
+    switch (presetId)
+    {
+        case 1: // Vocal Extract (Center)
+        {
+            const float low = hzToNorm (220.0);
+            const float high = hzToNorm (8000.0);
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 0.32f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.20f);
+            setParam ("depthWidth", 0.40f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            break;
+        }
+        case 2: // Vocal Cut / Karaoke (Invert Center)
+        {
+            const float low = hzToNorm (220.0);
+            const float high = hzToNorm (8000.0);
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 0.32f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.20f);
+            setParam ("depthWidth", 0.40f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (1.0f);
+            break;
+        }
+        case 3: // Bass Extract
+        {
+            const float low = hzToNorm (30.0);
+            const float high = hzToNorm (320.0);
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 0.28f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.15f);
+            setParam ("depthWidth", 0.35f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            break;
+        }
+        case 4: // Guitar Left
+        {
+            const float low = hzToNorm (150.0);
+            const float high = hzToNorm (6500.0);
+            setParam ("positionCentre", -0.65f);
+            setParam ("positionWidth", 0.42f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.30f);
+            setParam ("depthWidth", 0.60f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            break;
+        }
+        case 5: // Guitar Right
+        {
+            const float low = hzToNorm (150.0);
+            const float high = hzToNorm (6500.0);
+            setParam ("positionCentre", 0.65f);
+            setParam ("positionWidth", 0.42f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.30f);
+            setParam ("depthWidth", 0.60f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            break;
+        }
+        case 6: // Snare / Drums
+        {
+            const float low = hzToNorm (120.0);
+            const float high = hzToNorm (12000.0);
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 0.45f);
+            setParam ("frequencyCentre", (low + high) * 0.5f);
+            setParam ("frequencyWidth", high - low);
+            setParam ("depthCentre", 0.35f);
+            setParam ("depthWidth", 0.70f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            break;
+        }
+        case 7: // Reset All
+        {
+            setParam ("positionCentre", 0.0f);
+            setParam ("positionWidth", 1.0f);
+            setParam ("frequencyCentre", 0.5f);
+            setParam ("frequencyWidth", 1.0f);
+            setParam ("depthCentre", 0.5f);
+            setParam ("depthWidth", 1.0f);
+            if (auto* p = processor.parameters.getParameter ("invertArea"))
+                p->setValueNotifyingHost (0.0f);
+            break;
+        }
+        default:
+            break;
+    }
+    repaint();
 }
 
 void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
@@ -442,6 +576,25 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
             isSlotB = false;
         }
         repaint();
+        return;
+    }
+
+    // Preset dropdown menu
+    else if (juce::Rectangle<float> (368, 572, 95, 28).contains (point))
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, text (u8"1. ボーカル抽出 (Center 220Hz-8kHz)"));
+        menu.addItem (2, text (u8"2. ボーカル除去 / カラオケ (Invert Center)"));
+        menu.addItem (3, text (u8"3. ベース抽出 (Center 30Hz-320Hz)"));
+        menu.addItem (4, text (u8"4. ギター L (Left 150Hz-6.5kHz)"));
+        menu.addItem (5, text (u8"5. ギター R (Right 150Hz-6.5kHz)"));
+        menu.addItem (6, text (u8"6. ドラム / スネア (120Hz-12kHz)"));
+        menu.addSeparator();
+        menu.addItem (7, text (u8"7. 全体リセット (All-Pass)"));
+        menu.showMenuAsync (juce::PopupMenu::Options(), [this] (int result) {
+            if (result > 0)
+                applyPreset (result);
+        });
         return;
     }
 
