@@ -38,7 +38,10 @@ OtokirisAudioProcessorEditor::OtokirisAudioProcessorEditor (OtokirisAudioProcess
     startTimerHz (25);
 }
 
-OtokirisAudioProcessorEditor::~OtokirisAudioProcessorEditor() = default;
+OtokirisAudioProcessorEditor::~OtokirisAudioProcessorEditor()
+{
+    stopTimer();
+}
 
 void OtokirisAudioProcessorEditor::updateHeatmapImages()
 {
