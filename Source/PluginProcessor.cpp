@@ -65,7 +65,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout OtokirisAudioProcessor::crea
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "depthCentre", "Depth Centre", juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "depthWidth", "Depth Width", juce::NormalisableRange<float> (0.02f, 1.0f), 0.47f));
+        "depthWidth", "Depth Width", juce::NormalisableRange<float> (0.02f, 1.0f), 1.0f));
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "positionLock", "Position Lock", false));
     params.push_back (std::make_unique<juce::AudioParameterBool> (
@@ -154,8 +154,15 @@ void OtokirisAudioProcessor::releaseResources()
 bool OtokirisAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto& mainOutput = layouts.getMainOutputChannelSet();
-    return mainOutput == juce::AudioChannelSet::mono()
-        || mainOutput == juce::AudioChannelSet::stereo();
+    const auto& mainInput  = layouts.getMainInputChannelSet();
+
+    if (mainOutput != juce::AudioChannelSet::mono() && mainOutput != juce::AudioChannelSet::stereo())
+        return false;
+
+    if (mainInput != juce::AudioChannelSet::mono() && mainInput != juce::AudioChannelSet::stereo())
+        return false;
+
+    return true;
 }
 
 void OtokirisAudioProcessor::processSTFTFrame()
@@ -214,26 +221,10 @@ void OtokirisAudioProcessor::processSTFTFrame()
     const int numBins = fftSize / 2 + 1;
     for (int k = 0; k < numBins; ++k)
     {
-        float realL = 0.0f, imagL = 0.0f;
-        float realR = 0.0f, imagR = 0.0f;
-
-        if (k == 0)
-        {
-            realL = leftFFTData[0];
-            realR = rightFFTData[0];
-        }
-        else if (k == fftSize / 2)
-        {
-            realL = leftFFTData[(size_t) fftSize];
-            realR = rightFFTData[(size_t) fftSize];
-        }
-        else
-        {
-            realL = leftFFTData[(size_t) (2 * k)];
-            imagL = leftFFTData[(size_t) (2 * k + 1)];
-            realR = rightFFTData[(size_t) (2 * k)];
-            imagR = rightFFTData[(size_t) (2 * k + 1)];
-        }
+        const float realL = leftFFTData[(size_t) (2 * k)];
+        const float imagL = leftFFTData[(size_t) (2 * k + 1)];
+        const float realR = rightFFTData[(size_t) (2 * k)];
+        const float imagR = rightFFTData[(size_t) (2 * k + 1)];
 
         const float magL = std::hypot (realL, imagL);
         const float magR = std::hypot (realR, imagR);
@@ -299,23 +290,10 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float binGain = prevGain;
 
         // Apply gain to complex spectrum
-        if (k == 0)
-        {
-            leftFFTData[0] = realL * binGain;
-            rightFFTData[0] = realR * binGain;
-        }
-        else if (k == fftSize / 2)
-        {
-            leftFFTData[(size_t) fftSize] = realL * binGain;
-            rightFFTData[(size_t) fftSize] = realR * binGain;
-        }
-        else
-        {
-            leftFFTData[(size_t) (2 * k)] = realL * binGain;
-            leftFFTData[(size_t) (2 * k + 1)] = imagL * binGain;
-            rightFFTData[(size_t) (2 * k)] = realR * binGain;
-            rightFFTData[(size_t) (2 * k + 1)] = imagR * binGain;
-        }
+        leftFFTData[(size_t) (2 * k)]     = realL * binGain;
+        leftFFTData[(size_t) (2 * k + 1)] = imagL * binGain;
+        rightFFTData[(size_t) (2 * k)]     = realR * binGain;
+        rightFFTData[(size_t) (2 * k + 1)] = imagR * binGain;
     }
 
     // Update spectrumLevel array for single-band meter access and swap heatmap
@@ -333,13 +311,13 @@ void OtokirisAudioProcessor::processSTFTFrame()
     fft.performRealOnlyInverseTransform (leftFFTData.data());
     fft.performRealOnlyInverseTransform (rightFFTData.data());
 
-    // Synthesis Hann window & OLA scaling (2/3 / fftSize for 75% Hann OLA)
+    // Synthesis Hann window & OLA scaling (2/3 for 75% Hann OLA; JUCE IFFT already normalizes by 1/fftSize)
     window.multiplyWithWindowingTable (leftFFTData.data(), fftSize);
     window.multiplyWithWindowingTable (rightFFTData.data(), fftSize);
-    const float olaScale = (2.0f / 3.0f) / (float) fftSize;
+    const float olaScale = 2.0f / 3.0f;
 
-    // Overlap-add into output circular buffer
-    const int targetPos = (olaReadPos + fftSize) % olaBufferSize;
+    // Overlap-add into output circular buffer (aligned with olaReadPos for exact fftSize - 1 latency)
+    const int targetPos = olaReadPos;
     for (int i = 0; i < fftSize; ++i)
     {
         const int idx = (targetPos + i) % olaBufferSize;
@@ -369,11 +347,11 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
             const auto samplePos = position->getTimeInSamples();
             const auto currentSample = samplePos.hasValue() ? *samplePos : lastHostSample;
-            const auto discontinuity = samplePos.hasValue() && haveHostPosition
-                && (currentSample < lastHostSample
+            const auto discontinuity = playing && wasPlaying && samplePos.hasValue() && haveHostPosition
+                && (currentSample < lastHostSample - (juce::int64) numSamples
                     || currentSample - lastHostSample > (juce::int64) numSamples * 4);
 
-            if (! haveHostPosition || discontinuity || (playing && ! wasPlaying))
+            if ((playing && ! wasPlaying) || discontinuity)
                 resetSTFTBuffers();
 
             lastHostSample = currentSample + numSamples;
