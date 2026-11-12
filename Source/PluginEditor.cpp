@@ -364,7 +364,7 @@ void drawScope (juce::Graphics& graphics, OtokirisAudioProcessor& processor,
 {
     graphics.setColour (scopeBackground);
     graphics.fillRect (area);
-    juce::ignoreUnused (frequencyCentre);
+
     const auto selection = depth
         ? juce::Rectangle<int> ((int) (area.getX() + centre * area.getWidth()
                                       - width * area.getWidth() * 0.5f),
@@ -378,29 +378,36 @@ void drawScope (juce::Graphics& graphics, OtokirisAudioProcessor& processor,
                                       * area.getHeight()),
                                 (int) (width * area.getWidth()),
                                 (int) (frequencyWidth * area.getHeight()));
-    juce::Image spectrogram (juce::Image::RGB, area.getWidth(), area.getHeight(), true);
-    juce::Image::BitmapData pixels (spectrogram, juce::Image::BitmapData::writeOnly);
-    for (int x = 0; x < spectrogram.getWidth(); ++x)
-        for (int y = 0; y < spectrogram.getHeight(); ++y)
-        {
-            const auto frequencyPosition = 1.0f - (float) y
-                                             / (float) juce::jmax (1, spectrogram.getHeight() - 1);
-            const auto band = juce::jlimit (0, 127,
-                                            (int) std::round (frequencyPosition * 127.0f));
-            const auto spatial = depth ? std::abs ((float) x
-                                                   / (float) juce::jmax (1, spectrogram.getWidth() - 1)
-                                                   - 0.20f)
-                                       : std::abs ((float) x
-                                                   / (float) juce::jmax (1, spectrogram.getWidth() - 1)
-                                                   - 0.50f);
-            const auto level = processor.getSpectrumLevel (band)
-                             * std::exp (-spatial * spatial * 42.0f);
-            const auto shaped = std::sqrt (juce::jlimit (0.0f, 1.0f, level));
-            pixels.setPixelColour (x, y, juce::Colour::fromHSV (
-                0.76f - shaped * 0.76f, 0.96f,
-                juce::jlimit (0.025f, 1.0f, 0.025f + shaped * 1.15f), 1.0f));
-        }
-    graphics.drawImageAt (spectrogram, area.getX(), area.getY());
+
+    const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
+    const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
+
+    if (! noVisual)
+    {
+        juce::Image spectrogram (juce::Image::RGB, area.getWidth(), area.getHeight(), true);
+        juce::Image::BitmapData pixels (spectrogram, juce::Image::BitmapData::writeOnly);
+        for (int x = 0; x < spectrogram.getWidth(); ++x)
+            for (int y = 0; y < spectrogram.getHeight(); ++y)
+            {
+                const auto frequencyPosition = 1.0f - (float) y
+                                                 / (float) juce::jmax (1, spectrogram.getHeight() - 1);
+                const auto band = juce::jlimit (0, 127,
+                                                (int) std::round (frequencyPosition * 127.0f));
+                const auto spatial = depth ? std::abs ((float) x
+                                                       / (float) juce::jmax (1, spectrogram.getWidth() - 1)
+                                                       - 0.20f)
+                                           : std::abs ((float) x
+                                                       / (float) juce::jmax (1, spectrogram.getWidth() - 1)
+                                                       - 0.50f);
+                const auto level = processor.getSpectrumLevel (band)
+                                 * std::exp (-spatial * spatial * 42.0f);
+                const auto shaped = std::sqrt (juce::jlimit (0.0f, 1.0f, level));
+                pixels.setPixelColour (x, y, juce::Colour::fromHSV (
+                    0.76f - shaped * 0.76f, 0.96f,
+                    juce::jlimit (0.025f, 1.0f, 0.025f + shaped * 1.15f), 1.0f));
+            }
+        graphics.drawImageAt (spectrogram, area.getX(), area.getY());
+    }
 
     graphics.setColour (gridColour);
     graphics.drawRect (area, 1);
