@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <cmath>
 
 OtokirisAudioProcessor::OtokirisAudioProcessor()
     : AudioProcessor (BusesProperties()
@@ -7,99 +8,128 @@ OtokirisAudioProcessor::OtokirisAudioProcessor()
         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       parameters (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-    for (auto& level : spectrum)
+    inputFifo[0].resize (fftSize, 0.0f);
+    inputFifo[1].resize (fftSize, 0.0f);
+    outputOlaBuffer[0].resize (olaBufferSize, 0.0f);
+    outputOlaBuffer[1].resize (olaBufferSize, 0.0f);
+
+    for (auto& level : spectrumLevel)
         level.store (0.0f);
+
+    updateBinMapping (44100.0);
+}
+
+void OtokirisAudioProcessor::getHeatmapData (std::array<float, numBands * numSlots>& outPan,
+                                             std::array<float, numBands * numSlots>& outDepth) const noexcept
+{
+    const int idx = activeGridIndex.load (std::memory_order_acquire);
+    outPan = heatmapGrids[(size_t) idx].pan;
+    outDepth = heatmapGrids[(size_t) idx].depth;
 }
 
 float OtokirisAudioProcessor::getSpectrumLevel (int index) const noexcept
 {
-    return index >= 0 && index < (int) spectrum.size() ? spectrum[(size_t) index].load() : 0.0f;
+    return index >= 0 && index < numBands ? spectrumLevel[(size_t) index].load (std::memory_order_relaxed) : 0.0f;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout OtokirisAudioProcessor::createParameterLayout()
 {
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> parameters;
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "outputVolume", "Output Volume", juce::NormalisableRange<float> (0.0f, 1.0f), 1.0f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "positionScale", "Position Scale", juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "colourScale", "Colour Scale", juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "positionCentre", "Position Centre", juce::NormalisableRange<float> (-1.0f, 1.0f), 0.0f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "positionWidth", "Position Width", juce::NormalisableRange<float> (0.05f, 1.0f), 0.55f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "frequencyCentre", "Frequency Centre", juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "frequencyWidth", "Frequency Width", juce::NormalisableRange<float> (0.02f, 1.0f), 0.67f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "depthCentre", "Depth Centre", juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "depthWidth", "Depth Width", juce::NormalisableRange<float> (0.02f, 1.0f), 0.47f));
-    parameters.push_back (std::make_unique<juce::AudioParameterBool>(
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
         "positionLock", "Position Lock", false));
-    parameters.push_back (std::make_unique<juce::AudioParameterBool>(
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
         "frequencyLock", "Frequency Lock", false));
-    parameters.push_back (std::make_unique<juce::AudioParameterBool>(
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
         "invertArea", "Invert Area", false));
-    parameters.push_back (std::make_unique<juce::AudioParameterBool>(
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
         "noVisual", "No Visual", false));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "extractionAmount", "Extraction Amount", juce::NormalisableRange<float> (0.0f, 1.0f), 1.0f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "maskSoftness", "Mask Softness", juce::NormalisableRange<float> (0.0f, 1.0f), 0.15f));
-    parameters.push_back (std::make_unique<juce::AudioParameterFloat>(
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "reverbReduction", "Reverb Reduction", juce::NormalisableRange<float> (0.0f, 1.0f), 0.0f));
-    return { parameters.begin(), parameters.end() };
+    return { params.begin(), params.end() };
 }
 
-void OtokirisAudioProcessor::updateFilterCoefficients (float sampleRate, float lowFreq, float highFreq)
+void OtokirisAudioProcessor::updateBinMapping (double sampleRate)
 {
-    constexpr float threshold = 0.5f;
-    if (std::abs (sampleRate - lastFilterSampleRate) < 0.1f
-        && std::abs (lowFreq - lastFilterLow) < threshold
-        && std::abs (highFreq - lastFilterHigh) < threshold)
+    const int numBins = fftSize / 2 + 1;
+    binMap.resize ((size_t) numBins);
+    const double nyquist = sampleRate * 0.5;
+    const double logMin = std::log (20.0);
+    const double logMax = std::log (juce::jmax (20.0, nyquist));
+    const double logRange = juce::jmax (1e-6, logMax - logMin);
+
+    for (int k = 0; k < numBins; ++k)
     {
-        return;
+        const float freq = (float) (k * sampleRate / fftSize);
+        float logPos = 0.0f;
+        if (freq > 20.0f)
+            logPos = juce::jlimit (0.0f, 1.0f, (float) ((std::log ((double) freq) - logMin) / logRange));
+
+        const int band = juce::jlimit (0, numBands - 1, (int) std::round (logPos * (numBands - 1)));
+        binMap[(size_t) k] = { band, freq, logPos };
     }
+}
 
-    lastFilterSampleRate = sampleRate;
-    lastFilterLow = lowFreq;
-    lastFilterHigh = highFreq;
+void OtokirisAudioProcessor::resetSTFTBuffers()
+{
+    inputFifo[0].assign (fftSize, 0.0f);
+    inputFifo[1].assign (fftSize, 0.0f);
+    outputOlaBuffer[0].assign (olaBufferSize, 0.0f);
+    outputOlaBuffer[1].assign (olaBufferSize, 0.0f);
+    fifoWritePos = 0;
+    olaReadPos = 0;
+    samplesSinceLastHop = 0;
+    leftFFTData.fill (0.0f);
+    rightFFTData.fill (0.0f);
 
-    auto hpCoeffs = juce::dsp::IIR::Coefficients<float>::makeHighPass (sampleRate, lowFreq, 0.7071f);
-    auto lpCoeffs = juce::dsp::IIR::Coefficients<float>::makeLowPass (sampleRate, highFreq, 0.7071f);
-
-    for (size_t ch = 0; ch < 2; ++ch)
+    for (auto& grid : heatmapGrids)
     {
-        highPassFilters[ch].coefficients = hpCoeffs;
-        lowPassFilters[ch].coefficients = lpCoeffs;
+        grid.pan.fill (0.0f);
+        grid.depth.fill (0.0f);
     }
+    currentAccumulator.pan.fill (0.0f);
+    currentAccumulator.depth.fill (0.0f);
+    for (auto& lvl : spectrumLevel)
+        lvl.store (0.0f);
 }
 
 void OtokirisAudioProcessor::prepareToPlay (double sampleRate, int)
 {
     const auto sr = sampleRate > 0.0 ? sampleRate : 44100.0;
     analysisSampleRate.store (sr);
-    analysisFifo.fill (0.0f);
-    fftData.fill (0.0f);
-    analysisFifoIndex = 0;
-    analysisSampleCounter = 0;
+    setLatencySamples (fftSize);
+
+    inputFifo[0].resize (fftSize, 0.0f);
+    inputFifo[1].resize (fftSize, 0.0f);
+    outputOlaBuffer[0].resize (olaBufferSize, 0.0f);
+    outputOlaBuffer[1].resize (olaBufferSize, 0.0f);
+
+    updateBinMapping (sr);
+    resetSTFTBuffers();
+
     haveHostPosition = false;
     hostPlaying.store (false);
-    for (auto& level : spectrum)
-        level.store (0.0f);
-
-    lastFilterSampleRate = -1.0f;
-    lastFilterLow = -1.0f;
-    lastFilterHigh = -1.0f;
-    updateFilterCoefficients ((float) sr, 20.0f, (float) (sr * 0.49));
-
-    for (auto& filter : highPassFilters)
-        filter.reset();
-    for (auto& filter : lowPassFilters)
-        filter.reset();
 }
 
 void OtokirisAudioProcessor::releaseResources()
@@ -113,16 +143,191 @@ bool OtokirisAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
         || mainOutput == juce::AudioChannelSet::stereo();
 }
 
+void OtokirisAudioProcessor::processSTFTFrame()
+{
+    // Extract last fftSize samples from circular inputFifo with analysis window
+    for (int i = 0; i < fftSize; ++i)
+    {
+        const int readIdx = (fifoWritePos - fftSize + i + fftSize) % fftSize;
+        leftFFTData[(size_t) i] = inputFifo[0][(size_t) readIdx];
+        rightFFTData[(size_t) i] = inputFifo[1][(size_t) readIdx];
+    }
+    std::fill (leftFFTData.begin() + fftSize, leftFFTData.end(), 0.0f);
+    std::fill (rightFFTData.begin() + fftSize, rightFFTData.end(), 0.0f);
+
+    window.multiplyWithWindowingTable (leftFFTData.data(), fftSize);
+    window.multiplyWithWindowingTable (rightFFTData.data(), fftSize);
+
+    fft.performRealOnlyForwardTransform (leftFFTData.data());
+    fft.performRealOnlyForwardTransform (rightFFTData.data());
+
+    // Parameters
+    const auto* freqCentreParam = parameters.getRawParameterValue ("frequencyCentre");
+    const auto* freqWidthParam = parameters.getRawParameterValue ("frequencyWidth");
+    const auto* panCentreParam = parameters.getRawParameterValue ("positionCentre");
+    const auto* panWidthParam = parameters.getRawParameterValue ("positionWidth");
+    const auto* depthCentreParam = parameters.getRawParameterValue ("depthCentre");
+    const auto* depthWidthParam = parameters.getRawParameterValue ("depthWidth");
+    const auto* extAmountParam = parameters.getRawParameterValue ("extractionAmount");
+    const auto* maskSoftParam = parameters.getRawParameterValue ("maskSoftness");
+    const auto* invertParam = parameters.getRawParameterValue ("invertArea");
+    const auto* reverbRedParam = parameters.getRawParameterValue ("reverbReduction");
+
+    const float freqCentre = freqCentreParam != nullptr ? freqCentreParam->load() : 0.5f;
+    const float freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 0.67f;
+    const float panCentre = panCentreParam != nullptr ? panCentreParam->load() : 0.0f;
+    const float panWidth = panWidthParam != nullptr ? panWidthParam->load() : 0.55f;
+    const float depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
+    const float depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 0.47f;
+    const float extAmount = extAmountParam != nullptr ? extAmountParam->load() : 1.0f;
+    const float maskSoftness = juce::jmax (0.005f, maskSoftParam != nullptr ? maskSoftParam->load() : 0.15f);
+    const bool invert = invertParam != nullptr && invertParam->load() > 0.5f;
+    const float reverbRed = reverbRedParam != nullptr ? reverbRedParam->load() : 0.0f;
+
+    // Decay accumulator for smooth heatmap visuals
+    for (float& v : currentAccumulator.pan)
+        v *= 0.72f;
+    for (float& v : currentAccumulator.depth)
+        v *= 0.72f;
+
+    std::array<float, numBands> currentBandEnergy {};
+
+    const int numBins = fftSize / 2 + 1;
+    for (int k = 0; k < numBins; ++k)
+    {
+        float realL = 0.0f, imagL = 0.0f;
+        float realR = 0.0f, imagR = 0.0f;
+
+        if (k == 0)
+        {
+            realL = leftFFTData[0];
+            realR = rightFFTData[0];
+        }
+        else if (k == fftSize / 2)
+        {
+            realL = leftFFTData[(size_t) fftSize];
+            realR = rightFFTData[(size_t) fftSize];
+        }
+        else
+        {
+            realL = leftFFTData[(size_t) (2 * k)];
+            imagL = leftFFTData[(size_t) (2 * k + 1)];
+            realR = rightFFTData[(size_t) (2 * k)];
+            imagR = rightFFTData[(size_t) (2 * k + 1)];
+        }
+
+        const float magL = std::hypot (realL, imagL);
+        const float magR = std::hypot (realR, imagR);
+        const float sumMag = magL + magR + 1e-6f;
+
+        // Pan estimation: -1 (Left) to +1 (Right)
+        const float pan = (magR - magL) / sumMag;
+
+        // Depth / Diffuseness estimation from Mid/Side components
+        const float realMid = (realL + realR) * 0.5f;
+        const float imagMid = (imagL + imagR) * 0.5f;
+        const float realSide = (realL - realR) * 0.5f;
+        const float imagSide = (imagL - imagR) * 0.5f;
+        const float magMid = std::hypot (realMid, imagMid);
+        const float magSide = std::hypot (realSide, imagSide);
+        const float depth = magSide / (magMid + magSide + 1e-6f); // 0 (direct/front) to 1 (diffuse/back)
+
+        // Visual Heatmap accumulation
+        const auto& bInfo = binMap[(size_t) k];
+        const int band = bInfo.band;
+        const float avgMag = 0.5f * (magL + magR);
+        const float visualMag = juce::jlimit (0.0f, 1.0f, avgMag / 32.0f);
+
+        currentBandEnergy[(size_t) band] = juce::jmax (currentBandEnergy[(size_t) band], visualMag);
+
+        const int panSlot = juce::jlimit (0, numSlots - 1, (int) std::round ((pan + 1.0f) * 0.5f * (numSlots - 1)));
+        const int depthSlot = juce::jlimit (0, numSlots - 1, (int) std::round (depth * (numSlots - 1)));
+        const size_t panIdx = (size_t) (band * numSlots + panSlot);
+        const size_t depthIdx = (size_t) (band * numSlots + depthSlot);
+
+        currentAccumulator.pan[panIdx] = juce::jmax (currentAccumulator.pan[panIdx], visualMag);
+        currentAccumulator.depth[depthIdx] = juce::jmax (currentAccumulator.depth[depthIdx], visualMag);
+
+        // STFT Spectral Mask calculation
+        const float logPos = bInfo.logPos;
+        const float freqDist = std::abs (logPos - freqCentre);
+        const float freqMask = juce::jlimit (0.0f, 1.0f, (freqWidth * 0.5f - freqDist) / maskSoftness + 0.5f);
+
+        const float panDist = std::abs (pan - panCentre);
+        const float panMask = juce::jlimit (0.0f, 1.0f, (panWidth * 0.5f - panDist) / maskSoftness + 0.5f);
+
+        const float depthDist = std::abs (depth - depthCentre);
+        float depthMask = juce::jlimit (0.0f, 1.0f, (depthWidth * 0.5f - depthDist) / maskSoftness + 0.5f);
+
+        // Reverb reduction suppresses high-depth (ambient/diffuse) components
+        if (reverbRed > 0.0f)
+            depthMask *= juce::jmax (0.0f, 1.0f - reverbRed * 0.6f * depth);
+
+        float mask = freqMask * panMask * depthMask;
+        if (invert)
+            mask = 1.0f - mask;
+
+        const float binGain = (1.0f - extAmount) + extAmount * mask;
+
+        // Apply gain to complex spectrum
+        if (k == 0)
+        {
+            leftFFTData[0] = realL * binGain;
+            rightFFTData[0] = realR * binGain;
+        }
+        else if (k == fftSize / 2)
+        {
+            leftFFTData[(size_t) fftSize] = realL * binGain;
+            rightFFTData[(size_t) fftSize] = realR * binGain;
+        }
+        else
+        {
+            leftFFTData[(size_t) (2 * k)] = realL * binGain;
+            leftFFTData[(size_t) (2 * k + 1)] = imagL * binGain;
+            rightFFTData[(size_t) (2 * k)] = realR * binGain;
+            rightFFTData[(size_t) (2 * k + 1)] = imagR * binGain;
+        }
+    }
+
+    // Update spectrumLevel array for single-band meter access
+    for (size_t b = 0; b < numBands; ++b)
+        spectrumLevel[b].store (currentBandEnergy[b], std::memory_order_relaxed);
+
+    // Swap heatmap buffer for UI thread
+    const int nextIdx = 1 - activeGridIndex.load (std::memory_order_relaxed);
+    heatmapGrids[(size_t) nextIdx] = currentAccumulator;
+    activeGridIndex.store (nextIdx, std::memory_order_release);
+
+    // Inverse STFT
+    fft.performRealOnlyInverseTransform (leftFFTData.data());
+    fft.performRealOnlyInverseTransform (rightFFTData.data());
+
+    // Synthesis Hann window & OLA scaling (2/3 / fftSize for 75% Hann OLA)
+    window.multiplyWithWindowingTable (leftFFTData.data(), fftSize);
+    window.multiplyWithWindowingTable (rightFFTData.data(), fftSize);
+    const float olaScale = (2.0f / 3.0f) / (float) fftSize;
+
+    // Overlap-add into output circular buffer
+    const int targetPos = (olaReadPos + fftSize) % olaBufferSize;
+    for (int i = 0; i < fftSize; ++i)
+    {
+        const int idx = (targetPos + i) % olaBufferSize;
+        outputOlaBuffer[0][(size_t) idx] += leftFFTData[(size_t) i] * olaScale;
+        outputOlaBuffer[1][(size_t) idx] += rightFFTData[(size_t) i] * olaScale;
+    }
+}
+
 void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                            juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
     juce::ignoreUnused (midiMessages);
 
-    if (buffer.getNumSamples() <= 0)
+    const int numSamples = buffer.getNumSamples();
+    if (numSamples <= 0)
         return;
 
-    bool shouldAnalyse = true;
+    bool isPlaying = true;
     if (auto* hostPlayHead = getPlayHead())
     {
         if (auto position = hostPlayHead->getPosition())
@@ -131,146 +336,59 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             const auto wasPlaying = hostPlaying.load();
             hostPlaying.store (playing);
 
-            const auto samplePosition = position->getTimeInSamples();
-            const auto currentSample = samplePosition.hasValue() ? *samplePosition : lastHostSample;
-            const auto discontinuity = samplePosition.hasValue() && haveHostPosition
+            const auto samplePos = position->getTimeInSamples();
+            const auto currentSample = samplePos.hasValue() ? *samplePos : lastHostSample;
+            const auto discontinuity = samplePos.hasValue() && haveHostPosition
                 && (currentSample < lastHostSample
-                    || currentSample - lastHostSample > (juce::int64) buffer.getNumSamples() * 4);
+                    || currentSample - lastHostSample > (juce::int64) numSamples * 4);
+
             if (! haveHostPosition || discontinuity || (playing && ! wasPlaying))
-            {
-                analysisFifo.fill (0.0f);
-                fftData.fill (0.0f);
-                analysisFifoIndex = 0;
-            }
-            lastHostSample = currentSample + buffer.getNumSamples();
+                resetSTFTBuffers();
+
+            lastHostSample = currentSample + numSamples;
             haveHostPosition = true;
-            shouldAnalyse = playing;
+            isPlaying = playing;
         }
     }
 
-    if (shouldAnalyse && buffer.getNumChannels() > 0)
-    {
-        const auto* leftInput = buffer.getReadPointer (0);
-        const auto* rightInput = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : leftInput;
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-        {
-            const auto mono = 0.5f * (leftInput[sample] + rightInput[sample]);
-            analysisFifo[(size_t) analysisFifoIndex++] = mono;
-            if (analysisFifoIndex < fftSize)
-                continue;
+    const int numChannels = buffer.getNumChannels();
+    const auto* leftIn = buffer.getReadPointer (0);
+    const auto* rightIn = numChannels > 1 ? buffer.getReadPointer (1) : leftIn;
 
-            std::copy (analysisFifo.begin(), analysisFifo.end(), fftData.begin());
-            window.multiplyWithWindowingTable (fftData.data(), fftSize);
-            fft.performFrequencyOnlyForwardTransform (fftData.data());
-            const auto nyquist = analysisSampleRate.load() * 0.5;
-            for (size_t band = 0; band < spectrum.size(); ++band)
+    auto* leftOut = buffer.getWritePointer (0);
+    auto* rightOut = numChannels > 1 ? buffer.getWritePointer (1) : nullptr;
+
+    const auto* gainParam = parameters.getRawParameterValue ("outputVolume");
+    const float outputGain = gainParam != nullptr ? gainParam->load() : 1.0f;
+
+    for (int s = 0; s < numSamples; ++s)
+    {
+        // Push incoming samples to input circular FIFO
+        inputFifo[0][(size_t) fifoWritePos] = leftIn[s];
+        inputFifo[1][(size_t) fifoWritePos] = rightIn[s];
+        fifoWritePos = (fifoWritePos + 1) % fftSize;
+
+        if (isPlaying)
+        {
+            if (++samplesSinceLastHop >= hopSize)
             {
-                const auto normalisedBand = (float) band / (float) (spectrum.size() - 1);
-                const auto frequency = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0,
-                                                        (double) normalisedBand);
-                const auto bin = juce::jlimit (1, fftSize / 2 - 1,
-                                               (int) std::round (frequency / analysisSampleRate.load()
-                                                                 * fftSize));
-                const auto magnitude = juce::jlimit (0.0f, 1.0f,
-                                                     fftData[(size_t) bin] / 48.0f);
-                spectrum[band].store (magnitude);
+                samplesSinceLastHop = 0;
+                processSTFTFrame();
             }
-            analysisFifoIndex = fftSize / 2;
-            std::move (analysisFifo.begin() + fftSize / 2, analysisFifo.end(),
-                       analysisFifo.begin());
         }
+
+        // Pull processed sample from output overlap-add buffer
+        const float outL = outputOlaBuffer[0][(size_t) olaReadPos] * outputGain;
+        const float outR = outputOlaBuffer[1][(size_t) olaReadPos] * outputGain;
+
+        outputOlaBuffer[0][(size_t) olaReadPos] = 0.0f;
+        outputOlaBuffer[1][(size_t) olaReadPos] = 0.0f;
+        olaReadPos = (olaReadPos + 1) % olaBufferSize;
+
+        leftOut[s] = outL;
+        if (rightOut != nullptr)
+            rightOut[s] = outR;
     }
-
-    const auto* gainParameter = parameters.getRawParameterValue ("outputVolume");
-    const auto outputGain = gainParameter != nullptr ? gainParameter->load() : 1.0f;
-    const auto channelsToProcess = juce::jmin (buffer.getNumChannels(), getTotalNumOutputChannels());
-
-    const auto sampleRate = (float) analysisSampleRate.load();
-    const auto* freqCentreParam = parameters.getRawParameterValue ("frequencyCentre");
-    const auto* freqWidthParam = parameters.getRawParameterValue ("frequencyWidth");
-    const auto freqCentre = freqCentreParam != nullptr ? freqCentreParam->load() : 0.5f;
-    const auto freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 1.0f;
-    const auto lowNormalised = juce::jlimit (0.0f, 1.0f, freqCentre - freqWidth * 0.5f);
-    const auto highNormalised = juce::jlimit (0.0f, 1.0f, freqCentre + freqWidth * 0.5f);
-    const auto nyquist = sampleRate * 0.5;
-    const auto lowFrequency = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) lowNormalised);
-    const auto highFrequency = 20.0 * std::pow (juce::jmax (20.0, nyquist) / 20.0, (double) highNormalised);
-    const auto filterLow = juce::jlimit (10.0, nyquist * 0.95, lowFrequency);
-    const auto filterHigh = juce::jlimit (filterLow + 20.0, nyquist * 0.98, highFrequency);
-
-    const auto* extractionAmountParam = parameters.getRawParameterValue ("extractionAmount");
-    const auto* maskSoftnessParam = parameters.getRawParameterValue ("maskSoftness");
-    const auto* reverbReductionParam = parameters.getRawParameterValue ("reverbReduction");
-    const auto extractionAmount = extractionAmountParam != nullptr ? extractionAmountParam->load() : 1.0f;
-    const auto maskSoftness = maskSoftnessParam != nullptr ? maskSoftnessParam->load() : 0.15f;
-    const auto reverbReduction = reverbReductionParam != nullptr ? reverbReductionParam->load() : 0.0f;
-    const auto bandGain = juce::jlimit (0.0f, 1.0f,
-                                        extractionAmount * (1.0f - reverbReduction * 0.35f));
-
-    updateFilterCoefficients (sampleRate, (float) filterLow, (float) filterHigh);
-
-    for (int channel = 0; channel < channelsToProcess; ++channel)
-    {
-        auto* samples = buffer.getWritePointer (channel);
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-        {
-            samples[sample] = highPassFilters[(size_t) channel].processSample (samples[sample]);
-            samples[sample] = lowPassFilters[(size_t) channel].processSample (samples[sample]);
-            samples[sample] *= bandGain;
-        }
-    }
-
-    for (int channel = 0; channel < channelsToProcess; ++channel)
-        buffer.applyGain (channel, 0, buffer.getNumSamples(), outputGain);
-
-    if (channelsToProcess >= 2)
-    {
-        const auto* panCentreParam = parameters.getRawParameterValue ("positionCentre");
-        const auto* panWidthParam = parameters.getRawParameterValue ("positionWidth");
-        const auto* invertParam = parameters.getRawParameterValue ("invertArea");
-        const auto* depthCentreParam = parameters.getRawParameterValue ("depthCentre");
-        const auto* depthWidthParam = parameters.getRawParameterValue ("depthWidth");
-
-        const auto panCentre = panCentreParam != nullptr ? panCentreParam->load() : 0.0f;
-        const auto panWidth = panWidthParam != nullptr ? panWidthParam->load() : 1.0f;
-        const auto invert = invertParam != nullptr && invertParam->load() > 0.5f;
-        const auto depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
-        const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 1.0f;
-
-        const auto softness = juce::jmax (0.001f, maskSoftness);
-        auto* left = buffer.getWritePointer (0);
-        auto* right = buffer.getWritePointer (1);
-
-        for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-        {
-            const auto l = left[sample];
-            const auto r = right[sample];
-            const auto leftLevel = std::abs (l);
-            const auto rightLevel = std::abs (r);
-            const auto total = leftLevel + rightLevel + 1.0e-6f;
-            const auto pan = (rightLevel - leftLevel) / total;
-
-            // Pan mask
-            const auto panDist = std::abs (pan - panCentre);
-            const auto panMask = juce::jlimit (0.0f, 1.0f, (panWidth * 0.5f - panDist) / softness + 0.5f);
-
-            // Depth mask: Diffuseness / Front-Back based on mid/side ratio
-            const auto midLevel = std::abs (l + r) * 0.5f;
-            const auto sideLevel = std::abs (l - r) * 0.5f;
-            const auto depthVal = sideLevel / (midLevel + sideLevel + 1.0e-6f); // 0 (dry/front) to 1 (diffuse/back)
-            const auto depthDist = std::abs (depthVal - depthCentre);
-            const auto depthMask = juce::jlimit (0.0f, 1.0f, (depthWidth * 0.5f - depthDist) / softness + 0.5f);
-
-            auto combinedMask = panMask * depthMask;
-            if (invert)
-                combinedMask = 1.0f - combinedMask;
-
-            const auto finalGain = (1.0f - extractionAmount) + extractionAmount * combinedMask;
-            left[sample] *= finalGain;
-            right[sample] *= finalGain;
-        }
-    }
-
 }
 
 juce::AudioProcessorEditor* OtokirisAudioProcessor::createEditor()
