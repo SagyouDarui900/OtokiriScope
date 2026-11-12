@@ -268,8 +268,10 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float freqDist = std::abs (logPos - freqCentre);
         const float freqMask = juce::jlimit (0.0f, 1.0f, (freqWidth * 0.5f - freqDist) / maskSoftness + 0.5f);
 
+        // Pan mask: pan is in [-1, +1] (total span = 2.0), so normalized width [0..1] represents half-span [0..1]
         const float panDist = std::abs (pan - panCentre);
-        const float panMask = juce::jlimit (0.0f, 1.0f, (panWidth * 0.5f - panDist) / maskSoftness + 0.5f);
+        const float panHalfSpan = panWidth * 1.0f;
+        const float panMask = juce::jlimit (0.0f, 1.0f, (panHalfSpan - panDist) / maskSoftness + 0.5f);
 
         const float depthDist = std::abs (depth - depthCentre);
         float depthMask = juce::jlimit (0.0f, 1.0f, (depthWidth * 0.5f - depthDist) / maskSoftness + 0.5f);
