@@ -9,11 +9,21 @@ const auto scopeBackground = juce::Colour (0xff284953);
 const auto gridColour = juce::Colour (0xff24d28a);
 const auto areaColour = juce::Colour (0xffff0080);
 const auto areaFill = juce::Colour (0xff00005d);
-const auto darkText = juce::Colour (0xff202020);
 
-void drawScope (juce::Graphics&, OtokirisAudioProcessor&, juce::Rectangle<int>,
-                bool, float, float, float, float);
 juce::String text (const char* utf8) { return juce::String::fromUTF8 (utf8); }
+
+juce::Colour valueToHeatmapColour (float v)
+{
+    if (v <= 0.002f)
+        return scopeBackground;
+
+    const float shaped = std::sqrt (juce::jlimit (0.0f, 1.0f, v));
+    // Hue: 0.55 (Cyan/Blue-Green) down to 0.0 (Red)
+    const float hue = juce::jlimit (0.0f, 0.55f, 0.55f * (1.0f - shaped * 1.15f));
+    const float sat = juce::jlimit (0.55f, 1.0f, 0.55f + shaped * 0.45f);
+    const float bri = juce::jlimit (0.28f, 1.0f, 0.28f + shaped * 0.8f);
+    return juce::Colour::fromHSV (hue, sat, bri, 1.0f);
+}
 }
 
 OtokirisAudioProcessorEditor::OtokirisAudioProcessorEditor (OtokirisAudioProcessor& p)
@@ -22,13 +32,48 @@ OtokirisAudioProcessorEditor::OtokirisAudioProcessorEditor (OtokirisAudioProcess
     setSize (825, 612);
     setResizeLimits (640, 480, 1920, 1440);
     setResizable (true, true);
-    startTimerHz (12);
+    startTimerHz (25);
 }
 
 OtokirisAudioProcessorEditor::~OtokirisAudioProcessorEditor() = default;
 
+void OtokirisAudioProcessorEditor::updateHeatmapImages()
+{
+    const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
+    if (noVisualParam != nullptr && noVisualParam->load() > 0.5f)
+        return;
+
+    processor.getHeatmapData (rawPanData, rawDepthData);
+
+    const auto* colourScaleParam = processor.parameters.getRawParameterValue ("colourScale");
+    const float colourScale = colourScaleParam != nullptr ? colourScaleParam->load() : 0.5f;
+    const float colourGain = std::pow (2.0f, (colourScale - 0.5f) * 4.0f);
+
+    juce::Image::BitmapData panPixels (panImage, juce::Image::BitmapData::writeOnly);
+    juce::Image::BitmapData depthPixels (depthImage, juce::Image::BitmapData::writeOnly);
+
+    constexpr int bands = OtokirisAudioProcessor::numBands;
+    constexpr int slots = OtokirisAudioProcessor::numSlots;
+
+    for (int y = 0; y < bands; ++y)
+    {
+        // bands: 0 = low freq (bottom), bands-1 = high freq (top)
+        const int bandIdx = bands - 1 - y;
+        for (int x = 0; x < slots; ++x)
+        {
+            const size_t idx = (size_t) (bandIdx * slots + x);
+            const float panVal = juce::jlimit (0.0f, 1.0f, rawPanData[idx] * colourGain);
+            const float depthVal = juce::jlimit (0.0f, 1.0f, rawDepthData[idx] * colourGain);
+
+            panPixels.setPixelColour (x, y, valueToHeatmapColour (panVal));
+            depthPixels.setPixelColour (x, y, valueToHeatmapColour (depthVal));
+        }
+    }
+}
+
 void OtokirisAudioProcessorEditor::timerCallback()
 {
+    updateHeatmapImages();
     repaint();
 }
 
@@ -39,37 +84,135 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     const auto scale = juce::jmin (getWidth() / designWidth, getHeight() / designHeight);
     const auto offsetX = (getWidth() - designWidth * scale) * 0.5f;
     const auto offsetY = (getHeight() - designHeight * scale) * 0.5f;
+
     graphics.fillAll (background);
-    graphics.addTransform (juce::AffineTransform::translation (offsetX, offsetY)
-                               .scaled (scale, scale));
+    graphics.addTransform (juce::AffineTransform::translation (offsetX, offsetY).scaled (scale, scale));
     graphics.setColour (background);
     graphics.fillRect (0, 0, (int) designWidth, (int) designHeight);
+
     graphics.setColour (lightText);
     graphics.setFont (17.0f);
     graphics.drawText (text (u8"定位"), 20, 34, 560, 20, juce::Justification::centred);
     graphics.drawText (text (u8"奥行き"), 615, 34, 196, 20, juce::Justification::centred);
 
-    const auto left = juce::Rectangle<int> (20, 68, 560, 340);
-    const auto right = juce::Rectangle<int> (615, 68, 196, 340);
+    const auto leftArea = juce::Rectangle<int> (20, 68, 560, 340);
+    const auto rightArea = juce::Rectangle<int> (615, 68, 196, 340);
+
     const auto* centreParameter = processor.parameters.getRawParameterValue ("positionCentre");
     const auto* widthParameter = processor.parameters.getRawParameterValue ("positionWidth");
     const auto* frequencyCentreParameter = processor.parameters.getRawParameterValue ("frequencyCentre");
     const auto* frequencyWidthParameter = processor.parameters.getRawParameterValue ("frequencyWidth");
     const auto* depthCentreParameter = processor.parameters.getRawParameterValue ("depthCentre");
     const auto* depthWidthParameter = processor.parameters.getRawParameterValue ("depthWidth");
+
     const auto centre = centreParameter != nullptr ? centreParameter->load() : 0.0f;
-    const auto width = widthParameter != nullptr ? widthParameter->load() : 1.0f;
+    const auto width = widthParameter != nullptr ? widthParameter->load() : 0.55f;
     const auto frequencyCentre = frequencyCentreParameter != nullptr ? frequencyCentreParameter->load() : 0.5f;
     const auto frequencyWidth = frequencyWidthParameter != nullptr ? frequencyWidthParameter->load() : 0.67f;
     const auto depthCentre = depthCentreParameter != nullptr ? depthCentreParameter->load() : 0.5f;
     const auto depthWidth = depthWidthParameter != nullptr ? depthWidthParameter->load() : 0.47f;
-    drawScope (graphics, processor, left, false, centre, width,
-               frequencyCentre, frequencyWidth);
-    drawScope (graphics, processor, right, true, depthCentre, depthWidth,
-               frequencyCentre, frequencyWidth);
 
+    const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
+    const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
+
+    // Lambda to draw a scope (either Pan or Depth)
+    auto drawScopeScreen = [&] (juce::Rectangle<int> area, bool isDepth,
+                                const juce::Image& heatmapImg,
+                                float c, float w, float fc, float fw)
+    {
+        graphics.setColour (scopeBackground);
+        graphics.fillRect (area);
+
+        if (! noVisual)
+            graphics.drawImage (heatmapImg, area.toFloat(), juce::RectanglePlacement::stretchToFit);
+
+        // Grid lines
+        graphics.setColour (gridColour);
+        graphics.drawRect (area, 1);
+        graphics.setColour (juce::Colour (0xff16785d));
+        for (const auto fraction : { 0.125f, 0.25f, 0.375f, 0.625f, 0.75f, 0.875f })
+            graphics.drawVerticalLine ((int) std::round (area.getX() + area.getWidth() * fraction),
+                                       (float) area.getY(), (float) area.getBottom());
+
+        graphics.setColour (juce::Colour (0xff35cfa0));
+        for (const auto fraction : { 0.0f, 0.50f, 1.0f })
+            graphics.drawVerticalLine ((int) std::round (area.getX() + area.getWidth() * fraction),
+                                       (float) area.getY(), (float) area.getBottom());
+
+        const auto nyquist = processor.getAnalysisSampleRate() * 0.5;
+        for (const auto freq : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
+        {
+            if (freq > nyquist)
+                continue;
+            const auto fraction = std::log (freq / 20.0) / std::log (nyquist / 20.0);
+            const auto y = (int) std::round (area.getBottom() - fraction * area.getHeight());
+            graphics.setColour (freq == 1000.0 || freq == 10000.0 ? juce::Colour (0xff35cfa0)
+                                                                 : juce::Colour (0xff16785d));
+            graphics.drawHorizontalLine (y, (float) area.getX(), (float) area.getRight());
+        }
+
+        // Selection rectangle
+        const auto selRect = isDepth
+            ? juce::Rectangle<int> ((int) (area.getX() + c * area.getWidth() - w * area.getWidth() * 0.5f),
+                                    (int) (area.getY() + (1.0f - fc - fw * 0.5f) * area.getHeight()),
+                                    (int) (w * area.getWidth()),
+                                    (int) (fw * area.getHeight()))
+            : juce::Rectangle<int> ((int) (area.getX() + area.getWidth() * 0.5f + c * area.getWidth() * 0.5f - w * area.getWidth() * 0.5f),
+                                    (int) (area.getY() + (1.0f - fc - fw * 0.5f) * area.getHeight()),
+                                    (int) (w * area.getWidth()),
+                                    (int) (fw * area.getHeight()));
+
+        graphics.setColour (areaFill.withAlpha (0.35f));
+        graphics.fillRect (selRect);
+        graphics.setColour (areaColour);
+        graphics.drawRect (selRect, 2);
+
+        // Frequency labels
+        graphics.setColour (juce::Colours::white);
+        graphics.setFont (13.0f);
+        const auto labelX = area.getX() + 5;
+        for (const auto item : { std::pair<double, const char*> { 20000.0, "20k" },
+                                 { 10000.0, "10k" }, { 5000.0, "5k" },
+                                 { 1000.0, "1k" }, { 100.0, "100" } })
+        {
+            if (item.first > nyquist)
+                continue;
+            const auto fraction = std::log (item.first / 20.0) / std::log (nyquist / 20.0);
+            const auto y = (int) std::round (area.getBottom() - fraction * area.getHeight());
+            graphics.setColour (juce::Colour (0xbb202020));
+            graphics.fillRect (labelX - 2, y - 9, 36, 17);
+            graphics.setColour (juce::Colours::white);
+            graphics.drawText (item.second, labelX, y - 8, 34, 15, juce::Justification::left);
+        }
+
+        // Watermark labels L/R or F/B
+        graphics.setColour (juce::Colour (0x661a9e85));
+        graphics.setFont (32.0f);
+        graphics.drawText (isDepth ? "F" : "L", area.getX() + 6, area.getBottom() - 45, 40, 40,
+                           juce::Justification::left);
+        graphics.drawText (isDepth ? "B" : "R", area.getRight() - 46, area.getBottom() - 45, 40, 40,
+                           juce::Justification::right);
+
+        // Bottom horizontal scale labels
+        graphics.setColour (juce::Colours::white);
+        graphics.setFont (12.0f);
+        const auto scaleLabels = isDepth ? std::array<const char*, 5> { "0", "25", "50", "75", "100" }
+                                         : std::array<const char*, 5> { "-1", "-0.5", "0", "0.5", "1" };
+        for (int i = 0; i < 5; ++i)
+        {
+            graphics.drawText (scaleLabels[(size_t) i],
+                               area.getX() + i * (area.getWidth() - 24) / 4 - 4,
+                               area.getBottom() + 3, 32, 16, juce::Justification::centred);
+        }
+    };
+
+    drawScopeScreen (leftArea, false, panImage, centre, width, frequencyCentre, frequencyWidth);
+    drawScopeScreen (rightArea, true, depthImage, depthCentre, depthWidth, frequencyCentre, frequencyWidth);
+
+    // Control panel (y = 420 onwards)
     graphics.setColour (controlBackground);
     graphics.fillRect (0, 420, (int) designWidth, 192);
+
     graphics.setColour (lightText);
     graphics.setFont (12.0f);
     const auto nyquist = processor.getAnalysisSampleRate() * 0.5;
@@ -82,23 +225,25 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         return hz >= 1000.0 ? juce::String (hz / 1000.0, hz >= 10000.0 ? 0 : 1) + " kHz"
                             : juce::String (hz, 0) + " Hz";
     };
-    graphics.drawText (text (u8"周波数範囲: ") + formatHz (lowHz) + " - "
-                       + formatHz (highHz) + "  (" + juce::String (frequencyWidth * 100.0f, 0) + "%)",
-                       20, 410, 260, 16, juce::Justification::left);
+
+    graphics.drawText (text (u8"周波数範囲: ") + formatHz (lowHz) + " - " + formatHz (highHz)
+                       + "  (" + juce::String (frequencyWidth * 100.0f, 0) + "%)",
+                       20, 410, 300, 16, juce::Justification::left);
     graphics.drawText (text (u8"奥行: ") + juce::String (depthCentre * 100.0f, 0)
                        + "% / " + juce::String (depthWidth * 100.0f, 0) + "%",
                        615, 410, 196, 16, juce::Justification::left);
 
-    const auto drawButton = [&graphics] (juce::Rectangle<int> bounds, const juce::String& text)
+    const auto drawButton = [&graphics] (juce::Rectangle<int> bounds, const juce::String& btnText, bool highlighted = false)
     {
-        graphics.setColour (juce::Colour (0xff555555));
+        graphics.setColour (highlighted ? juce::Colour (0xff777777) : juce::Colour (0xff555555));
         graphics.fillRect (bounds);
         graphics.setColour (juce::Colour (0xff9a9a9a));
         graphics.drawRect (bounds, 1);
         graphics.setColour (lightText);
         graphics.setFont (14.0f);
-        graphics.drawText (text, bounds, juce::Justification::centred);
+        graphics.drawText (btnText, bounds, juce::Justification::centred);
     };
+
     drawButton ({ 97, 430, 86, 24 }, text (u8"定位最大化"));
     drawButton ({ 257, 430, 86, 24 }, text (u8"定位中央"));
     drawButton ({ 418, 430, 86, 24 }, text (u8"周波数最大化"));
@@ -112,45 +257,53 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     graphics.drawText (text (u8"再生音量"), 450, 467, 78, 20, juce::Justification::left);
     graphics.drawText (text (u8"定位スケール"), 450, 499, 78, 20, juce::Justification::left);
     graphics.drawText (text (u8"カラースケール"), 450, 531, 90, 20, juce::Justification::left);
+
+    // Right sliders (Output volume, Position scale, Colour scale)
     for (const auto y : { 476, 508, 540 })
     {
         graphics.setColour (juce::Colour (0xffbcbcbc));
-        graphics.fillRect (y < 550 ? 530 : 530, y - 4, 135, 8);
-        graphics.setColour (juce::Colour (0xff777777));
+        graphics.fillRect (530, y - 4, 135, 8);
         const auto* id = y == 476 ? "outputVolume" : (y == 508 ? "positionScale" : "colourScale");
         const auto* value = processor.parameters.getRawParameterValue (id);
         const auto knobX = 530 + (int) std::round ((value != nullptr ? value->load() : 0.5f) * 127.0f);
+        graphics.setColour (juce::Colour (0xff777777));
         graphics.fillRect (knobX - 4, y - 9, 8, 18);
     }
+
+    // Left sliders (Extraction amount, Mask softness, Reverb reduction)
     for (const auto y : { 476, 508, 540 })
     {
         graphics.setColour (juce::Colour (0xffbcbcbc));
         graphics.fillRect (110, y - 4, 135, 8);
-        const auto* id = y == 476 ? "extractionAmount"
-                       : y == 508 ? "maskSoftness" : "reverbReduction";
+        const auto* id = y == 476 ? "extractionAmount" : (y == 508 ? "maskSoftness" : "reverbReduction");
         const auto* value = processor.parameters.getRawParameterValue (id);
         const auto knobX = 110 + (int) std::round ((value != nullptr ? value->load() : 0.0f) * 127.0f);
         graphics.setColour (juce::Colour (0xff777777));
         graphics.fillRect (knobX - 4, y - 9, 8, 18);
     }
+
+    // Checkboxes
     for (const auto& item : { std::pair<juce::String, int> { text (u8"定位固定"), 468 },
-                              { text (u8"周波数固定"), 492 }, { text (u8"抽出エリア反転"), 516 },
+                              { text (u8"周波数固定"), 492 },
+                              { text (u8"抽出エリア反転"), 516 },
                               { text (u8"ビジュアルなし"), 540 } })
     {
         const auto* id = item.second == 468 ? "positionLock"
                        : item.second == 492 ? "frequencyLock"
                        : item.second == 516 ? "invertArea" : "noVisual";
         const auto* value = processor.parameters.getRawParameterValue (id);
-        graphics.setColour (value != nullptr && value->load() > 0.5f
-                                ? juce::Colour (0xffff0080) : juce::Colours::white);
+        graphics.setColour (value != nullptr && value->load() > 0.5f ? areaColour : juce::Colours::white);
         graphics.fillRect (706, item.second, 15, 15);
         graphics.setColour (lightText);
         graphics.drawRect (706, item.second, 15, 15, 1);
         graphics.drawText (item.first, 727, item.second - 3, 110, 20, juce::Justification::left);
     }
+
+    // Bottom transport buttons
     drawButton ({ 94, 570, 73, 31 }, text (u8"先頭へ"));
     drawButton ({ 204, 570, 87, 31 }, text (u8"再生 / 停止"));
-    drawButton ({ 328, 570, 73, 31 }, text (u8"A / B"));
+    drawButton ({ 328, 570, 73, 31 }, isSlotB ? text (u8"Slot B") : text (u8"Slot A"), isSlotB);
+
     graphics.setColour (lightText);
     graphics.setFont (12.0f);
     const auto rateText = juce::String (processor.getAnalysisSampleRate(), 0) + " Hz";
@@ -179,6 +332,7 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
             parameter->setValueNotifyingHost (parameter->getValue() > 0.5f ? 0.0f : 1.0f);
     };
 
+    // Range preset buttons
     if (juce::Rectangle<float> (97, 430, 86, 24).contains (point))
         setParameter ("positionWidth", 1.0f);
     else if (juce::Rectangle<float> (257, 430, 86, 24).contains (point))
@@ -187,6 +341,8 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         setParameter ("frequencyWidth", 1.0f);
     else if (juce::Rectangle<float> (672, 430, 86, 24).contains (point))
         setParameter ("depthWidth", 1.0f);
+
+    // Checkboxes
     else if (juce::Rectangle<float> (706, 468, 150, 18).contains (point))
         toggleParameter ("positionLock");
     else if (juce::Rectangle<float> (706, 492, 150, 18).contains (point))
@@ -195,6 +351,71 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         toggleParameter ("invertArea");
     else if (juce::Rectangle<float> (706, 540, 150, 18).contains (point))
         toggleParameter ("noVisual");
+
+    // A/B switch button
+    else if (juce::Rectangle<float> (328, 570, 73, 31).contains (point))
+    {
+        const auto getVal = [this] (const char* id) -> float
+        {
+            auto* p = processor.parameters.getRawParameterValue (id);
+            return p != nullptr ? p->load() : 0.0f;
+        };
+
+        if (! isSlotB)
+        {
+            // Save to A, load from B if available
+            slotA.posCentre = getVal ("positionCentre");
+            slotA.posWidth = getVal ("positionWidth");
+            slotA.freqCentre = getVal ("frequencyCentre");
+            slotA.freqWidth = getVal ("frequencyWidth");
+            slotA.depthCentre = getVal ("depthCentre");
+            slotA.depthWidth = getVal ("depthWidth");
+            slotA.invert = getVal ("invertArea") > 0.5f;
+            slotA.hasValue = true;
+
+            if (slotB.hasValue)
+            {
+                setParameter ("positionCentre", slotB.posCentre);
+                setParameter ("positionWidth", slotB.posWidth);
+                setParameter ("frequencyCentre", slotB.freqCentre);
+                setParameter ("frequencyWidth", slotB.freqWidth);
+                setParameter ("depthCentre", slotB.depthCentre);
+                setParameter ("depthWidth", slotB.depthWidth);
+                if (auto* p = processor.parameters.getParameter ("invertArea"))
+                    p->setValueNotifyingHost (slotB.invert ? 1.0f : 0.0f);
+            }
+            isSlotB = true;
+        }
+        else
+        {
+            // Save to B, load from A
+            slotB.posCentre = getVal ("positionCentre");
+            slotB.posWidth = getVal ("positionWidth");
+            slotB.freqCentre = getVal ("frequencyCentre");
+            slotB.freqWidth = getVal ("frequencyWidth");
+            slotB.depthCentre = getVal ("depthCentre");
+            slotB.depthWidth = getVal ("depthWidth");
+            slotB.invert = getVal ("invertArea") > 0.5f;
+            slotB.hasValue = true;
+
+            if (slotA.hasValue)
+            {
+                setParameter ("positionCentre", slotA.posCentre);
+                setParameter ("positionWidth", slotA.posWidth);
+                setParameter ("frequencyCentre", slotA.freqCentre);
+                setParameter ("frequencyWidth", slotA.freqWidth);
+                setParameter ("depthCentre", slotA.depthCentre);
+                setParameter ("depthWidth", slotA.depthWidth);
+                if (auto* p = processor.parameters.getParameter ("invertArea"))
+                    p->setValueNotifyingHost (slotA.invert ? 1.0f : 0.0f);
+            }
+            isSlotB = false;
+        }
+        repaint();
+        return;
+    }
+
+    // Sliders
     else if (juce::Rectangle<float> (110, 465, 135, 22).contains (point))
         activeControl = 4;
     else if (juce::Rectangle<float> (110, 497, 135, 22).contains (point))
@@ -225,44 +446,48 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         return;
     }
 
+    // Scope selection rectangles
     const auto left = juce::Rectangle<float> (20.0f, 68.0f, 560.0f, 340.0f);
     const auto right = juce::Rectangle<float> (615.0f, 68.0f, 196.0f, 340.0f);
     activeScope = left.contains (point) ? 1 : (right.contains (point) ? 2 : 0);
     if (activeScope == 0)
         return;
+
     const auto positionLocked = processor.parameters.getRawParameterValue ("positionLock");
     const auto frequencyLocked = processor.parameters.getRawParameterValue ("frequencyLock");
     const auto scope = activeScope == 1 ? left : right;
+
     const auto centreParameter = processor.parameters.getRawParameterValue (
         activeScope == 1 ? "positionCentre" : "depthCentre");
     const auto widthParameter = processor.parameters.getRawParameterValue (
         activeScope == 1 ? "positionWidth" : "depthWidth");
     const auto frequencyCentreParameter = processor.parameters.getRawParameterValue ("frequencyCentre");
     const auto frequencyWidthParameter = processor.parameters.getRawParameterValue ("frequencyWidth");
-    const auto centre = centreParameter != nullptr ? centreParameter->load() : 0.0f;
+
+    const auto centre = centreParameter != nullptr ? centreParameter->load() : (activeScope == 1 ? 0.0f : 0.5f);
     const auto width = widthParameter != nullptr ? widthParameter->load() : 0.5f;
     const auto frequencyCentre = frequencyCentreParameter != nullptr ? frequencyCentreParameter->load() : 0.5f;
     const auto frequencyWidth = frequencyWidthParameter != nullptr ? frequencyWidthParameter->load() : 0.67f;
+
     const auto current = activeScope == 1
-        ? juce::Rectangle<float> (scope.getCentreX() + centre * scope.getWidth() * 0.5f
-                                  - width * scope.getWidth() * 0.5f,
-                                  scope.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f)
-                                  * scope.getHeight(),
+        ? juce::Rectangle<float> (scope.getCentreX() + centre * scope.getWidth() * 0.5f - width * scope.getWidth() * 0.5f,
+                                  scope.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f) * scope.getHeight(),
                                   width * scope.getWidth(), frequencyWidth * scope.getHeight())
-        : juce::Rectangle<float> (scope.getX() + centre * scope.getWidth()
-                                  - width * scope.getWidth() * 0.5f,
-                                  scope.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f)
-                                  * scope.getHeight(),
+        : juce::Rectangle<float> (scope.getX() + centre * scope.getWidth() - width * scope.getWidth() * 0.5f,
+                                  scope.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f) * scope.getHeight(),
                                   width * scope.getWidth(), frequencyWidth * scope.getHeight());
+
     const auto margin = 10.0f;
     dragEdges = (std::abs (point.x - current.getX()) <= margin ? 1 : 0)
               | (std::abs (point.x - current.getRight()) <= margin ? 2 : 0)
               | (std::abs (point.y - current.getY()) <= margin ? 4 : 0)
               | (std::abs (point.y - current.getBottom()) <= margin ? 8 : 0);
+
     if (positionLocked != nullptr && positionLocked->load() > 0.5f)
         dragEdges &= ~3;
     if (frequencyLocked != nullptr && frequencyLocked->load() > 0.5f)
         dragEdges &= ~12;
+
     draggingPosition = current.expanded (margin, margin).contains (point);
     dragStart = point;
     dragAreaAtStart = { (current.getX() - scope.getX()) / scope.getWidth(),
@@ -273,11 +498,12 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
 void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
 {
+    const auto scale = juce::jmin (getWidth() / 825.0f, getHeight() / 612.0f);
+    const auto point = (event.position - juce::Point<float> ((getWidth() - 825.0f * scale) * 0.5f,
+                                                              (getHeight() - 612.0f * scale) * 0.5f)) / scale;
+
     if (activeControl != 0)
     {
-        const auto scale = juce::jmin (getWidth() / 825.0f, getHeight() / 612.0f);
-        const auto point = (event.position - juce::Point<float> ((getWidth() - 825.0f * scale) * 0.5f,
-                                                                  (getHeight() - 612.0f * scale) * 0.5f)) / scale;
         const auto sliderX = activeControl >= 4 ? 110.0f : 530.0f;
         const auto value = juce::jlimit (0.0f, 1.0f, (point.x - sliderX) / 135.0f);
         const auto* id = activeControl == 1 ? "outputVolume"
@@ -290,35 +516,45 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
         repaint();
         return;
     }
+
     if (! draggingPosition)
         return;
-    const auto scale = juce::jmin (getWidth() / 825.0f, getHeight() / 612.0f);
-    const auto point = (event.position - juce::Point<float> ((getWidth() - 825.0f * scale) * 0.5f,
-                                                              (getHeight() - 612.0f * scale) * 0.5f)) / scale;
+
     const auto scope = activeScope == 1 ? juce::Rectangle<float> (20.0f, 68.0f, 560.0f, 340.0f)
                                         : juce::Rectangle<float> (615.0f, 68.0f, 196.0f, 340.0f);
+
     auto area = dragAreaAtStart;
-    const auto delta = (point - dragStart) / scope.getWidth();
-    if (dragEdges & 1) area.setLeft (area.getX() + delta.x);
-    if (dragEdges & 2) area.setRight (area.getRight() + delta.x);
-    if (dragEdges & 4) area.setTop (area.getY() + delta.y);
-    if (dragEdges & 8) area.setBottom (area.getBottom() + delta.y);
+    const auto deltaX = (point.x - dragStart.x) / scope.getWidth();
+    const auto deltaY = (point.y - dragStart.y) / scope.getHeight();
+
+    if (dragEdges & 1) area.setLeft (area.getX() + deltaX);
+    if (dragEdges & 2) area.setRight (area.getRight() + deltaX);
+    if (dragEdges & 4) area.setTop (area.getY() + deltaY);
+    if (dragEdges & 8) area.setBottom (area.getBottom() + deltaY);
     if (dragEdges == 0)
-        area.setPosition (area.getPosition() + delta);
+        area.setPosition (area.getX() + deltaX, area.getY() + deltaY);
+
     if (auto* locked = processor.parameters.getRawParameterValue ("positionLock"))
         if (locked->load() > 0.5f)
             area.setX (dragAreaAtStart.getX());
     if (auto* locked = processor.parameters.getRawParameterValue ("frequencyLock"))
         if (locked->load() > 0.5f)
             area.setY (dragAreaAtStart.getY());
+
     area = area.constrainedWithin (juce::Rectangle<float> (0.0f, 0.0f, 1.0f, 1.0f));
-    if (activeScope == 1) positionArea = area; else depthArea = area;
+    if (activeScope == 1)
+        positionArea = area;
+    else
+        depthArea = area;
+
     const auto centre = activeScope == 1
         ? juce::jlimit (-1.0f, 1.0f, (area.getCentreX() - 0.5f) * 2.0f)
         : juce::jlimit (0.0f, 1.0f, area.getCentreX());
     const auto width = area.getWidth();
+
     const auto centreId = activeScope == 1 ? "positionCentre" : "depthCentre";
     const auto widthId = activeScope == 1 ? "positionWidth" : "depthWidth";
+
     if (auto* parameter = processor.parameters.getParameter (centreId))
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (centre));
     if (auto* parameter = processor.parameters.getParameter (widthId))
@@ -327,6 +563,7 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (1.0f - area.getCentreY()));
     if (auto* parameter = processor.parameters.getParameter ("frequencyWidth"))
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (area.getHeight()));
+
     repaint();
 }
 
@@ -342,131 +579,53 @@ void OtokirisAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& eve
 {
     if (! draggingPosition)
         mouseDown (event);
+
+    const auto setParameter = [this] (const char* id, float value)
+    {
+        if (auto* parameter = processor.parameters.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+    };
+
     if (activeScope == 1)
     {
-        if (savedPositionArea.isEmpty()) { savedPositionArea = positionArea; positionArea = { 0.0f, 0.0f, 1.0f, 1.0f }; }
-        else { positionArea = savedPositionArea; savedPositionArea = {}; }
+        if (savedPositionArea.isEmpty())
+        {
+            savedPositionArea = positionArea;
+            setParameter ("positionCentre", 0.0f);
+            setParameter ("positionWidth", 1.0f);
+            setParameter ("frequencyCentre", 0.5f);
+            setParameter ("frequencyWidth", 1.0f);
+        }
+        else
+        {
+            const auto centre = juce::jlimit (-1.0f, 1.0f, (savedPositionArea.getCentreX() - 0.5f) * 2.0f);
+            setParameter ("positionCentre", centre);
+            setParameter ("positionWidth", savedPositionArea.getWidth());
+            setParameter ("frequencyCentre", 1.0f - savedPositionArea.getCentreY());
+            setParameter ("frequencyWidth", savedPositionArea.getHeight());
+            savedPositionArea = {};
+        }
     }
     else if (activeScope == 2)
     {
-        if (savedDepthArea.isEmpty()) { savedDepthArea = depthArea; depthArea = { 0.0f, 0.0f, 1.0f, 1.0f }; }
-        else { depthArea = savedDepthArea; savedDepthArea = {}; }
+        if (savedDepthArea.isEmpty())
+        {
+            savedDepthArea = depthArea;
+            setParameter ("depthCentre", 0.5f);
+            setParameter ("depthWidth", 1.0f);
+            setParameter ("frequencyCentre", 0.5f);
+            setParameter ("frequencyWidth", 1.0f);
+        }
+        else
+        {
+            setParameter ("depthCentre", savedDepthArea.getCentreX());
+            setParameter ("depthWidth", savedDepthArea.getWidth());
+            setParameter ("frequencyCentre", 1.0f - savedDepthArea.getCentreY());
+            setParameter ("frequencyWidth", savedDepthArea.getHeight());
+            savedDepthArea = {};
+        }
     }
+
     mouseUp (event);
     repaint();
-}
-
-namespace
-{
-void drawScope (juce::Graphics& graphics, OtokirisAudioProcessor& processor,
-                juce::Rectangle<int> area, bool depth,
-                float centre, float width, float frequencyCentre, float frequencyWidth)
-{
-    graphics.setColour (scopeBackground);
-    graphics.fillRect (area);
-
-    const auto selection = depth
-        ? juce::Rectangle<int> ((int) (area.getX() + centre * area.getWidth()
-                                      - width * area.getWidth() * 0.5f),
-                                (int) (area.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f)
-                                      * area.getHeight()),
-                                (int) (width * area.getWidth()),
-                                (int) (frequencyWidth * area.getHeight()))
-        : juce::Rectangle<int> ((int) (area.getX() + area.getWidth() * 0.5f + centre * area.getWidth() * 0.5f
-                                      - width * area.getWidth() * 0.5f),
-                                (int) (area.getY() + (1.0f - frequencyCentre - frequencyWidth * 0.5f)
-                                      * area.getHeight()),
-                                (int) (width * area.getWidth()),
-                                (int) (frequencyWidth * area.getHeight()));
-
-    const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
-    const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
-
-    if (! noVisual)
-    {
-        juce::Image spectrogram (juce::Image::RGB, area.getWidth(), area.getHeight(), true);
-        juce::Image::BitmapData pixels (spectrogram, juce::Image::BitmapData::writeOnly);
-        for (int x = 0; x < spectrogram.getWidth(); ++x)
-            for (int y = 0; y < spectrogram.getHeight(); ++y)
-            {
-                const auto frequencyPosition = 1.0f - (float) y
-                                                 / (float) juce::jmax (1, spectrogram.getHeight() - 1);
-                const auto band = juce::jlimit (0, 127,
-                                                (int) std::round (frequencyPosition * 127.0f));
-                const auto spatial = depth ? std::abs ((float) x
-                                                       / (float) juce::jmax (1, spectrogram.getWidth() - 1)
-                                                       - 0.20f)
-                                           : std::abs ((float) x
-                                                       / (float) juce::jmax (1, spectrogram.getWidth() - 1)
-                                                       - 0.50f);
-                const auto level = processor.getSpectrumLevel (band)
-                                 * std::exp (-spatial * spatial * 42.0f);
-                const auto shaped = std::sqrt (juce::jlimit (0.0f, 1.0f, level));
-                pixels.setPixelColour (x, y, juce::Colour::fromHSV (
-                    0.76f - shaped * 0.76f, 0.96f,
-                    juce::jlimit (0.025f, 1.0f, 0.025f + shaped * 1.15f), 1.0f));
-            }
-        graphics.drawImageAt (spectrogram, area.getX(), area.getY());
-    }
-
-    graphics.setColour (gridColour);
-    graphics.drawRect (area, 1);
-    graphics.setColour (juce::Colour (0xff16785d));
-    for (const auto fraction : { 0.125f, 0.25f, 0.375f, 0.625f, 0.75f, 0.875f })
-        graphics.drawVerticalLine ((int) std::round (area.getX() + area.getWidth() * fraction),
-                                   (float) area.getY(), (float) area.getBottom());
-    graphics.setColour (juce::Colour (0xff35cfa0));
-    for (const auto fraction : { 0.0f, 0.50f, 1.0f })
-        graphics.drawVerticalLine ((int) std::round (area.getX() + area.getWidth() * fraction),
-                                   (float) area.getY(), (float) area.getBottom());
-    const auto nyquist = processor.getAnalysisSampleRate() * 0.5;
-    for (const auto frequency : { 20.0, 50.0, 100.0, 200.0, 500.0,
-                                  1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
-    {
-        if (frequency > nyquist)
-            continue;
-        const auto fraction = std::log (frequency / 20.0) / std::log (nyquist / 20.0);
-        const auto y = (int) std::round (area.getBottom() - fraction * area.getHeight());
-        graphics.setColour (frequency == 1000.0 || frequency == 10000.0
-                                ? juce::Colour (0xff35cfa0)
-                                : juce::Colour (0xff16785d));
-        graphics.drawHorizontalLine (y, (float) area.getX(), (float) area.getRight());
-    }
-
-    graphics.setColour (areaFill.withAlpha (0.35f));
-    graphics.fillRect (selection);
-    graphics.setColour (areaColour);
-    graphics.drawRect (selection, 3);
-    graphics.setColour (juce::Colours::white);
-    graphics.setFont (14.0f);
-    const auto labelX = area.getX() + 5;
-    for (const auto item : { std::pair<double, const char*> { 20000.0, "20k" },
-                             { 10000.0, "10k" }, { 5000.0, "5k" },
-                             { 1000.0, "1k" }, { 100.0, "100" } })
-    {
-        if (item.first > nyquist)
-            continue;
-        const auto fraction = std::log (item.first / 20.0) / std::log (nyquist / 20.0);
-        const auto y = (int) std::round (area.getBottom() - fraction * area.getHeight());
-        graphics.setColour (juce::Colour (0xaa202020));
-        graphics.fillRect (labelX - 2, y - 10, 42, 19);
-        graphics.setColour (juce::Colours::white);
-        graphics.drawText (item.second, labelX, y - 9, 38, 18, juce::Justification::left);
-    }
-    graphics.setColour (juce::Colour (0xff1a9e85));
-    graphics.setFont (34.0f);
-    graphics.drawText (depth ? "F" : "L", area.getX() + 6, area.getBottom() - 50, 42, 45,
-                       juce::Justification::left);
-    graphics.drawText (depth ? "B" : "R", area.getRight() - 43, area.getBottom() - 50, 42, 45,
-                       juce::Justification::right);
-    graphics.setColour (juce::Colours::white);
-    graphics.setFont (12.0f);
-    const auto scaleLabels = depth ? std::array<const char*, 5> { "0", "25", "50", "75", "100" }
-                                   : std::array<const char*, 5> { "-1", "-0.5", "0", "0.5", "1" };
-    for (int i = 0; i < 5; ++i)
-        graphics.drawText (scaleLabels[(size_t) i],
-                           area.getX() + i * (area.getWidth() - 24) / 4 - 5,
-                           area.getBottom() + 3, 32, 16, juce::Justification::centred);
-
-}
 }
