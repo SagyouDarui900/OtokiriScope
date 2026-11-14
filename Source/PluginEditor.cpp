@@ -14,41 +14,56 @@ const auto areaFill = juce::Colour (0xff00005d);
 
 juce::String text (const char* utf8) { return juce::String::fromUTF8 (utf8); }
 
-juce::Colour valueToHeatmapColour (float v)
+struct HeatmapLUT
 {
-    // High-contrast noise floor gate: completely eliminates blurry background fog
-    if (v <= 0.04f)
-        return scopeBackground;
+    std::array<juce::Colour, 256> table;
+    HeatmapLUT()
+    {
+        for (int i = 0; i < 256; ++i)
+            table[(size_t) i] = calculateColour (i / 255.0f);
+    }
+    static juce::Colour calculateColour (float v)
+    {
+        // High-contrast noise floor gate: completely eliminates blurry background fog
+        if (v <= 0.04f)
+            return scopeBackground;
 
-    const float norm = juce::jlimit (0.0f, 1.0f, (v - 0.04f) / 0.96f);
-    // Perceptual gamma shaping for maximum punch and crispness
-    const float shaped = std::pow (norm, 0.72f);
+        const float norm = juce::jlimit (0.0f, 1.0f, (v - 0.04f) / 0.96f);
+        // Perceptual gamma shaping for maximum punch and crispness
+        const float shaped = std::pow (norm, 0.72f);
 
-    if (shaped < 0.22f)
-    {
-        // Low harmonics: subtle deep cyan
-        const float t = shaped / 0.22f;
-        return scopeBackground.interpolatedWith (juce::Colour (0xff00c8b0), t * 0.85f);
+        if (shaped < 0.22f)
+        {
+            // Low harmonics: subtle deep cyan
+            const float t = shaped / 0.22f;
+            return scopeBackground.interpolatedWith (juce::Colour (0xff00c8b0), t * 0.85f);
+        }
+        else if (shaped < 0.50f)
+        {
+            // Body: bright cyan/green to luminous yellow
+            const float t = (shaped - 0.22f) / 0.28f;
+            return juce::Colour (0xff00c8b0).interpolatedWith (juce::Colour (0xffffff00), t);
+        }
+        else if (shaped < 0.80f)
+        {
+            // Strong: luminous yellow to intense hot orange-red
+            const float t = (shaped - 0.50f) / 0.30f;
+            return juce::Colour (0xffffff00).interpolatedWith (juce::Colour (0xffff2200), t);
+        }
+        else
+        {
+            // Peaks & fundamentals: fiery red to blazing pure white
+            const float t = (shaped - 0.80f) / 0.20f;
+            return juce::Colour (0xffff2200).interpolatedWith (juce::Colours::white, t);
+        }
     }
-    else if (shaped < 0.50f)
+    inline juce::Colour get (float v) const noexcept
     {
-        // Body: bright cyan/green to luminous yellow
-        const float t = (shaped - 0.22f) / 0.28f;
-        return juce::Colour (0xff00c8b0).interpolatedWith (juce::Colour (0xffffff00), t);
+        const int idx = juce::jlimit (0, 255, (int) (v * 255.0f));
+        return table[(size_t) idx];
     }
-    else if (shaped < 0.80f)
-    {
-        // Strong: luminous yellow to intense hot orange-red
-        const float t = (shaped - 0.50f) / 0.30f;
-        return juce::Colour (0xffffff00).interpolatedWith (juce::Colour (0xffff2200), t);
-    }
-    else
-    {
-        // Peaks & fundamentals: fiery red to blazing pure white
-        const float t = (shaped - 0.80f) / 0.20f;
-        return juce::Colour (0xffff2200).interpolatedWith (juce::Colours::white, t);
-    }
-}
+};
+static const HeatmapLUT gHeatmapLUT;
 }
 
 OtokirisAudioProcessorEditor::OtokirisAudioProcessorEditor (OtokirisAudioProcessor& p)
@@ -93,8 +108,8 @@ void OtokirisAudioProcessorEditor::updateHeatmapImages()
             const float panVal = juce::jlimit (0.0f, 1.0f, rawPanData[idx] * colourGain);
             const float depthVal = juce::jlimit (0.0f, 1.0f, rawDepthData[idx] * colourGain);
 
-            panPixels.setPixelColour (x, y, valueToHeatmapColour (panVal));
-            depthPixels.setPixelColour (x, y, valueToHeatmapColour (depthVal));
+            panPixels.setPixelColour (x, y, gHeatmapLUT.get (panVal));
+            depthPixels.setPixelColour (x, y, gHeatmapLUT.get (depthVal));
         }
     }
 }
