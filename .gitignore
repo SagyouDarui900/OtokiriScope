@@ -5,3 +5,5 @@
 *.vcxproj*
 *.filters
 CMakeUserPresets.json
+/dist/
+*.zip
