@@ -88,6 +88,7 @@ void OtokirisAudioProcessor::updateBinMapping (double sampleRate)
     const int numBins = fftSize / 2 + 1;
     binMap.resize ((size_t) numBins);
     smoothedMaskGain.assign ((size_t) numBins, 1.0f);
+    rawMask.assign ((size_t) numBins, 1.0f);
     const double nyquist = sampleRate * 0.5;
     const double logMin = std::log (20.0);
     const double logMax = std::log (juce::jmax (20.0, nyquist));
@@ -125,6 +126,7 @@ void OtokirisAudioProcessor::resetSTFTBuffers()
     currentAccumulator.pan.fill (0.0f);
     currentAccumulator.depth.fill (0.0f);
     smoothedMaskGain.assign ((size_t) (fftSize / 2 + 1), 1.0f);
+    rawMask.assign ((size_t) (fftSize / 2 + 1), 1.0f);
     for (auto& lvl : spectrumLevel)
         lvl.store (0.0f);
 }
@@ -165,6 +167,28 @@ bool OtokirisAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
     return true;
 }
 
+namespace
+{
+inline float fastHypot (float r, float i) noexcept
+{
+    return std::sqrt (r * r + i * i + 1e-12f);
+}
+
+// Smooth Hermite roll-off curve with continuous zero derivatives at both ends.
+// Eliminates spectral splattering, comb-filter ringing, and harsh musical noise.
+inline float smoothMask (float dist, float halfSpan, float softness) noexcept
+{
+    const float inner = halfSpan - softness * 0.5f;
+    if (dist <= inner)
+        return 1.0f;
+    const float outer = halfSpan + softness * 0.5f;
+    if (dist >= outer)
+        return 0.0f;
+    const float t = (outer - dist) / softness;
+    return t * t * (3.0f - 2.0f * t);
+}
+}
+
 void OtokirisAudioProcessor::processSTFTFrame()
 {
     // Extract last fftSize samples from circular inputFifo with analysis window
@@ -200,16 +224,18 @@ void OtokirisAudioProcessor::processSTFTFrame()
     const float panCentre = panCentreParam != nullptr ? panCentreParam->load() : 0.0f;
     const float panWidth = panWidthParam != nullptr ? panWidthParam->load() : 0.55f;
     const float depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
-    const float depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 0.47f;
+    const float depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 1.0f;
     const float extAmount = extAmountParam != nullptr ? extAmountParam->load() : 1.0f;
     const float maskSoftness = juce::jmax (0.005f, maskSoftParam != nullptr ? maskSoftParam->load() : 0.15f);
     const bool invert = invertParam != nullptr && invertParam->load() > 0.5f;
     const float reverbRed = reverbRedParam != nullptr ? reverbRedParam->load() : 0.0f;
 
-    const bool updateHeatmap = hostPlaying.load (std::memory_order_relaxed);
+    const auto* noVisualParam = parameters.getRawParameterValue ("noVisual");
+    const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
+    const bool updateHeatmap = !noVisual && hostPlaying.load (std::memory_order_relaxed);
     if (updateHeatmap)
     {
-        // Decay accumulator faster (0.60f) for crisp, responsive transients and less blurry smear
+        // Decay accumulator for responsive transients
         for (float& v : currentAccumulator.pan)
             v *= 0.60f;
         for (float& v : currentAccumulator.depth)
@@ -226,8 +252,8 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float realR = rightFFTData[(size_t) (2 * k)];
         const float imagR = rightFFTData[(size_t) (2 * k + 1)];
 
-        const float magL = std::hypot (realL, imagL);
-        const float magR = std::hypot (realR, imagR);
+        const float magL = fastHypot (realL, imagL);
+        const float magR = fastHypot (realR, imagR);
         const float sumMag = magL + magR + 1e-6f;
 
         // Pan estimation: -1 (Left) to +1 (Right)
@@ -238,19 +264,18 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float imagMid = (imagL + imagR) * 0.5f;
         const float realSide = (realL - realR) * 0.5f;
         const float imagSide = (imagL - imagR) * 0.5f;
-        const float magMid = std::hypot (realMid, imagMid);
-        const float magSide = std::hypot (realSide, imagSide);
+        const float magMid = fastHypot (realMid, imagMid);
+        const float magSide = fastHypot (realSide, imagSide);
         const float depth = magSide / (magMid + magSide + 1e-6f); // 0 (direct/front) to 1 (diffuse/back)
 
         // Visual Heatmap accumulation with dynamic log-compression for punchy, crisp visuals
         const auto& bInfo = binMap[(size_t) k];
         const int band = bInfo.band;
         const float avgMag = 0.5f * (magL + magR);
-        // Log-perceptual compression: reveals quiet harmonics without washing out loud peaks
-        const float visualMag = juce::jlimit (0.0f, 1.0f, std::log1pf (avgMag * 15.0f) / 4.5f);
 
         if (updateHeatmap)
         {
+            const float visualMag = juce::jlimit (0.0f, 1.0f, std::log1pf (avgMag * 15.0f) / 4.5f);
             currentBandEnergy[(size_t) band] = juce::jmax (currentBandEnergy[(size_t) band], visualMag);
 
             const int panSlot = juce::jlimit (0, numSlots - 1, (int) std::round ((pan + 1.0f) * 0.5f * (numSlots - 1)));
@@ -262,18 +287,23 @@ void OtokirisAudioProcessor::processSTFTFrame()
             currentAccumulator.depth[depthIdx] = juce::jmax (currentAccumulator.depth[depthIdx], visualMag);
         }
 
-        // STFT Spectral Mask calculation
+        // STFT Spectral Mask calculation with smooth Hermite roll-off
         const float logPos = bInfo.logPos;
         const float freqDist = std::abs (logPos - freqCentre);
-        const float freqMask = juce::jlimit (0.0f, 1.0f, (freqWidth * 0.5f - freqDist) / maskSoftness + 0.5f);
+        const float freqMask = smoothMask (freqDist, freqWidth * 0.5f, maskSoftness);
 
         // Pan mask: pan is in [-1, +1] (total span = 2.0), so normalized width [0..1] represents half-span [0..1]
         const float panDist = std::abs (pan - panCentre);
         const float panHalfSpan = panWidth * 1.0f;
-        const float panMask = juce::jlimit (0.0f, 1.0f, (panHalfSpan - panDist) / maskSoftness + 0.5f);
+        const float panMask = smoothMask (panDist, panHalfSpan, maskSoftness);
 
-        const float depthDist = std::abs (depth - depthCentre);
-        float depthMask = juce::jlimit (0.0f, 1.0f, (depthWidth * 0.5f - depthDist) / maskSoftness + 0.5f);
+        // Depth mask: when depthWidth >= 0.95, pass full depth to prevent comb filtering on direct/center sounds
+        float depthMask = 1.0f;
+        if (depthWidth < 0.95f)
+        {
+            const float depthDist = std::abs (depth - depthCentre);
+            depthMask = smoothMask (depthDist, depthWidth * 0.5f, maskSoftness);
+        }
 
         // Reverb reduction suppresses high-depth (ambient/diffuse) components
         if (reverbRed > 0.0f)
@@ -283,17 +313,28 @@ void OtokirisAudioProcessor::processSTFTFrame()
         if (invert)
             mask = 1.0f - mask;
 
-        const float targetGain = (1.0f - extAmount) + extAmount * mask;
+        rawMask[(size_t) k] = mask;
+    }
+
+    // Step 2: Spectral smoothing (3-tap kernel) + temporal smoothing to eliminate musical noise / fluttering
+    for (int k = 0; k < numBins; ++k)
+    {
+        const float mPrev = k > 0 ? rawMask[(size_t) (k - 1)] : rawMask[0];
+        const float mCurr = rawMask[(size_t) k];
+        const float mNext = k + 1 < numBins ? rawMask[(size_t) (k + 1)] : mCurr;
+        const float smoothSpectralMask = 0.20f * mPrev + 0.60f * mCurr + 0.20f * mNext;
+
+        const float targetGain = (1.0f - extAmount) + extAmount * smoothSpectralMask;
         float& prevGain = smoothedMaskGain[(size_t) k];
-        const float coeff = targetGain > prevGain ? 0.65f : 0.40f;
+        // Fast attack (0.75) for crisp transients; gentle release (0.35) for smooth, natural decay
+        const float coeff = targetGain > prevGain ? 0.75f : 0.35f;
         prevGain += coeff * (targetGain - prevGain);
         const float binGain = prevGain;
 
-        // Apply gain to complex spectrum
-        leftFFTData[(size_t) (2 * k)]     = realL * binGain;
-        leftFFTData[(size_t) (2 * k + 1)] = imagL * binGain;
-        rightFFTData[(size_t) (2 * k)]     = realR * binGain;
-        rightFFTData[(size_t) (2 * k + 1)] = imagR * binGain;
+        leftFFTData[(size_t) (2 * k)]     *= binGain;
+        leftFFTData[(size_t) (2 * k + 1)] *= binGain;
+        rightFFTData[(size_t) (2 * k)]     *= binGain;
+        rightFFTData[(size_t) (2 * k + 1)] *= binGain;
     }
 
     // Update spectrumLevel array for single-band meter access and swap heatmap
