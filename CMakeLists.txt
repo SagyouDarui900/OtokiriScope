@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(OtokirisVST3 VERSION 0.1.0 LANGUAGES CXX)
+project(OtokiriScope VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,31 +16,31 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(JUCE)
 
-juce_add_plugin(OtokirisVST3
-    COMPANY_NAME "Otokiris"
-    BUNDLE_ID "jp.otokiris.OtokirisVST3"
+juce_add_plugin(OtokiriScope
+    COMPANY_NAME "OtokiriScope"
+    BUNDLE_ID "com.github.otokiriscope.OtokiriScope"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
-    PLUGIN_MANUFACTURER_CODE Otk1
-    PLUGIN_CODE Otk3
+    PLUGIN_MANUFACTURER_CODE Otks
+    PLUGIN_CODE Otks
     FORMATS VST3
-    PRODUCT_NAME "Otokiris"
+    PRODUCT_NAME "OtokiriScope"
 )
 
-juce_generate_juce_header(OtokirisVST3)
+juce_generate_juce_header(OtokiriScope)
 
-target_sources(OtokirisVST3 PRIVATE
+target_sources(OtokiriScope PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
 )
 
-target_compile_definitions(OtokirisVST3
+target_compile_definitions(OtokiriScope
     PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
@@ -48,10 +48,10 @@ target_compile_definitions(OtokirisVST3
 )
 
 if (MSVC)
-    target_compile_options(OtokirisVST3 PRIVATE /utf-8)
+    target_compile_options(OtokiriScope PRIVATE /utf-8)
 endif()
 
-target_link_libraries(OtokirisVST3
+target_link_libraries(OtokiriScope
     PRIVATE
         juce::juce_audio_utils
         juce::juce_gui_extra

@@ -1,8 +1,14 @@
-# OtokirisVST3 (音きりす VST3)
+# OtokiriScope (音きりスコープ)
 
-名作耳コピ・音源分離ツール「音きりす V1.0」(C) 2009 TODAKEN の直感的な操作感と UI を継承し、現代の DAW（REAPER 等）で動作する 64bit VST3 プラグインとして再構築したプロジェクトです。
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2064--bit-informational.svg)]()
+[![Format: VST3](https://img.shields.io/badge/Format-VST3-success.svg)]()
 
-4096 サンプルの高分解能 STFT（短時間フーリエ変換）による複素スペクトルマスキング、左右の周波数別定位解析、Mid/Side 奥行き（拡散度）解析を備え、ボーカルや特定楽器の抽出・除去（耳コピ、カラオケ作成、トラック分離確認）を DAW 上でリアルタイムかつ低レイテンシに行えます。
+**OtokiriScope** は、ステレオ音源から特定の定位（左右）や周波数帯域、奥行き（Mid/Side拡散度）を視覚的に囲んで抽出・分離・消去できる現代の 64bit VST3 プラグインです。
+
+2009年に公開された名作耳コピ・音源分離フリーソフト **「音きりす V1.0」（(C) 2009 TODAKEN）** の直感的な 2 画面操作体系に強い敬意を払い、現代の DAW（REAPER、Cubase、Studio One 等）環境で快適に動作するオープンソースの VST3 プラグインとして再構築（Spiritual Successor / オマージュ）しました。
+
+4096 サンプルの高分解能 STFT（短時間フーリエ変換）による複素スペクトルマスキングと周波数平滑化フィルターにより、耳コピ、ボーカル抽出、ボーカルキャンセル（カラオケ化）、特定楽器の分離・リスニングを DAW 上でリアルタイムに行えます。
 
 ---
 
@@ -13,20 +19,21 @@
   - **奥行きスクリーン (F - B)**: Mid/Side 信号のエネルギー比から算出した音の奥行き（Direct/Front 〜 Diffuse/Back）を表示。
 - **4096-point STFT 複素スペクトルマスキング**
   - 75% オーバーラップ（Hann 窓 OLA）による滑らかでアーティファクトの少ないフィルタリング。
-  - 境界の滑らかさ（Mask Softness）の調整と時間ゲインスムージングにより、クリックレスな操作感を実現。
+  - **3タップ周波数平滑化（3-tap Spectral Smoothing）**: スペクトル編集特有の「水泡音・チリチリしたミュージカルノイズ」を大幅に低減。
+  - **3次エルミート（Smoothstep）ロールオフ**: 急峻なカットでもリンギングやコムフィルター音を発生させない滑らかな減衰。
 - **耳コピ専用プリセット & A/B 比較**
   - ボーカル抽出（Center）、ボーカルキャンセル、ベース、ギター（L/R）、スネア/ドラム、高音アルペジオ、超高域 Air などのプリセットを即座に呼び出し可能。
   - Slot A / Slot B の 2 つの設定をワンクリックで切り替えて試聴可能。
 - **直感的なマウス操作**
   - 矩形の内側ドラッグで移動、外周ドラッグでリサイズ。
   - ダブルクリックまたは各最大化ボタンで「最大化 ↔ 直前状態」を相互トグル切り替え。
-  - **Shift キーを押しながらドラッグ**: 5 倍の精度で微調整が可能。
+  - **Shift キーを押しながらドラッグ**: 5 倍の精度（0.2倍速）で微調整が可能。
+- **低負荷 & 高速 UI レンダリング**
+  - 256要素の事前計算ルックアップテーブル（LUT）と SSE ハードウェア命令により、CPU 負荷を極小化。
+  - 「ビジュアルなし」モードにより、バックグラウンド再生時の負荷をさらに軽減。
 - **DAW トランスポート同期 & 完全オートメーション対応**
-  - REAPER などのホスト DAW のテンポ (BPM)、拍子、タイムコード、小節数、再生状態と完全同期。
+  - ホスト DAW のテンポ (BPM)、拍子、タイムコード、小節数、再生状態と完全同期。
   - すべての主要パラメータは VST3 パラメータとして DAW からオートメーション・保存・リコール可能。
-- **高視認性ヒートマップ & 高音域対応**
-  - ノイズフロアゲートと多段階カラーパレットにより、暗い背景に倍音やトランジェントが鮮明に浮かび上がる視覚性。
-  - 20Hz からサンプリング周波数の Nyquist 周波数（22.05kHz / 24kHz 以上）までフルカバー。
 
 ---
 
@@ -36,7 +43,7 @@
 - **プラグイン形式**: VST3 (64-bit)
 - **対応サンプリングレート**: 44,100Hz / 48,000Hz / 88,200Hz / 96,000Hz 等
 - **入出力**: ステレオ入出力（モノラル出力トラックへのダウンミックス対応）
-- **動作確認 DAW**: Cockos REAPER 7.x（推奨）
+- **動作確認 DAW**: Cockos REAPER 7.x（推奨）、Cubase、Studio One、FL Studio 等
 
 ---
 
@@ -44,7 +51,7 @@
 
 ```text
 +------------------------------------------------------------------------+
-|                               音きりす VST3                            |
+| OtokiriScope                                                           |
 +------------------------------------+-----------------------------------+
 |            [ 定位スクリーン ]      |         [ 奥行きスクリーン ]      |
 |  20k +---------------------------+ |  20k +--------------------------+ |
@@ -90,64 +97,61 @@
 - **抽出エリア反転**: 選択した範囲の音を**消去（マスク）**し、枠外の音を抽出します（ボーカルキャンセル等）。
 - **ビジュアルなし**: スペクトログラムのリアルタイム描画を停止し、UI 負荷を極小化します。
 
-### 4. プリセットとトランスポート
-- **プリセットメニュー**: `[Slot A]` ボタン等の横エリアを右クリック、またはプリセットスロットから「Vocal Extract」「Vocal Cancel」「High Arpeggio」などをワンクリックで適用できます。
-- **A/B 比較**: `[Slot A]` / `[Slot B]` をクリックして 2 種類の設定を切り替え試聴できます。
-- **DAW 同期表示**: 最下段に REAPER のサンプリングレート、再生状態、BPM、拍子、現在タイムコードが表示されます。
-
 ---
 
 ## ビルド方法
 
 ### 必要環境
-- Windows 11 / 10 64-bit
-- Visual Studio 2022（C++ によるデスクトップ開発ワークロード）
+- Windows 11 / 10 (64-bit)
+- Visual Studio 2022（「C++ によるデスクトップ開発」ワークロード）
 - CMake 3.22 以上
 - Git
 
 ### ビルド手順
 
-PowerShell を管理者権限（※VST3 フォルダへの自動インストール用）で開き、リポジトリルートで実行します。
-
 ```powershell
-# 1. CMake 構成 (JUCE 8 は初回 CMake 実行時に自動フェッチされます)
+# 1. リポジトリのクローン
+git clone https://github.com/your-username/OtokiriScope.git
+cd OtokiriScope
+
+# 2. CMake 構成 (JUCE 8.0.10 は自動フェッチされます)
 cmake -B build -G "Visual Studio 17 2022" -A x64
 
-# 2. VST3 のビルドとシステムへのインストール
-cmake --build build --config Release --target OtokirisVST3_VST3
+# 3. リリースビルド
+cmake --build build --config Release --target OtokiriScope_VST3
 ```
 
-ビルドが完了すると、自動的に以下の標準 VST3 ディレクトリへバイナリが配置されます。
-
-```text
-C:\Program Files\Common Files\VST3\Otokiris.vst3
-```
-
-DAW（REAPER）を起動し、FX ブラウザから `Otokiris` を検索してトラックに挿入してください。
+ビルドが完了すると、`build/OtokiriScope_artefacts/Release/VST3/OtokiriScope.vst3` に生成されます。
+（管理者権限で実行した場合は自動的に `C:\Program Files\Common Files\VST3\OtokiriScope.vst3` へインストールされます）
 
 ---
 
 ## ディレクトリ構成
 
 ```text
-otokiris10/
+OtokiriScope/
 ├── CMakeLists.txt            # JUCE 8 CMake ビルド定義
-├── DESIGN.md                 # アーキテクチャおよび DSP/UI 詳細設計書
-├── README.md                 # 本説明書
-├── Source/
-│   ├── PluginProcessor.h     # AudioProcessor、4096-STFT 解析・OLA マスキング
-│   ├── PluginProcessor.cpp   # DSP 実装、状態保存、DAW 同期
-│   ├── PluginEditor.h        # AudioProcessorEditor、マウス入力、UI 状態
-│   └── PluginEditor.cpp      # カスタム描画、ヒートマップ、操作パネル
-├── Otokiris.exe              # 原作「音きりす V1.0」バイナリ（仕様確認用）
-├── OtokirisHelp.pdf          # 原作マニュアル
-└── readme.txt                # 原作 Readme
+├── DESIGN.md                 # アーキテクチャおよび DSP/UI 設計書
+├── LICENSE                   # GPLv3 ライセンス
+├── README.md                 # 本ドキュメント
+└── Source/
+    ├── PluginProcessor.h     # AudioProcessor、4096-STFT 解析・OLA マスキング
+    ├── PluginProcessor.cpp   # DSP 実装、状態保存、DAW 同期
+    ├── PluginEditor.h        # AudioProcessorEditor、マウス入力、UI 状態
+    └── PluginEditor.cpp      # カスタム描画、ヒートマップ、操作パネル
 ```
 
 ---
 
-## クレジット・ライセンス
+## クレジット・謝辞
 
-- **オリジナル版「音きりす」**: (C) 2009 TODAKEN
-- **フレームワーク**: [JUCE 8](https://juce.com/) (AudioProcessor, DSP Module)
-- 本 VST3 実装は、オリジナル「音きりす」の思想と操作体系を現代の音楽制作・耳コピ環境向けに再現・拡張したものです。
+- **オリジナル着想**: [音きりす V1.0](https://www.vector.co.jp/soft/winnt/art/se481498.html) (C) 2009 TODAKEN 氏
+  - 素晴らしいUI・操作体系のアイデアを提供してくださった原作者の TODAKEN 氏に深く感謝申し上げます。
+  - 本ソフトウェアは原作者様とは直接の関係がない独立したオープンソース・リメイクプロジェクトです。
+- **オーディオフレームワーク**: [JUCE 8](https://juce.com/) (GPLv3)
+
+---
+
+## ライセンス
+
+本ソフトウェアは [GNU General Public License v3.0 (GPLv3)](LICENSE) の下で公開されています。

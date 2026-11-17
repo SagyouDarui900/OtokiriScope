@@ -7,3 +7,8 @@
 CMakeUserPresets.json
 /dist/
 *.zip
+
+# Original third-party freeware binaries / docs (keep local, do not push to public GitHub)
+Otokiris.exe
+OtokirisHelp.pdf
+readme.txt

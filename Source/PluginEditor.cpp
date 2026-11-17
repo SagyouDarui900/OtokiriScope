@@ -134,6 +134,10 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     graphics.fillRect (0, 0, (int) designWidth, (int) designHeight);
 
     // Header titles
+    graphics.setColour (juce::Colour (0xbbffffff));
+    graphics.setFont (13.0f);
+    graphics.drawText ("OtokiriScope", 20, 10, 200, 18, juce::Justification::left);
+
     graphics.setColour (lightText);
     graphics.setFont (17.0f);
     graphics.drawText (text (u8"定位"), 20, 34, 560, 22, juce::Justification::centred);

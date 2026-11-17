@@ -1,4 +1,4 @@
-# OtokirisVST3 設計書
+# OtokiriScope (音きりスコープ) 設計書
 
 ## 1. 目的
 
@@ -199,13 +199,13 @@ REAPERオートメーションの全てを実装する。
 PowerShellでリポジトリルートから実行する。
 
 ```powershell
-cmake --build build --config Release --target OtokirisVST3_VST3
+cmake --build build --config Release --target OtokiriScope_VST3
 ```
 
 成功すると、以下へVST3がコピーされる。
 
 ```text
-C:\Program Files\Common Files\VST3\Otokiris.vst3
+C:\Program Files\Common Files\VST3\OtokiriScope.vst3
 ```
 
 検証項目:
