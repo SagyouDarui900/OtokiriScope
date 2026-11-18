@@ -135,7 +135,7 @@ void OtokirisAudioProcessor::prepareToPlay (double sampleRate, int)
 {
     const auto sr = sampleRate > 0.0 ? sampleRate : 44100.0;
     analysisSampleRate.store (sr);
-    setLatencySamples (fftSize);
+    setLatencySamples (fftSize - 1);
 
     inputFifo[0].resize (fftSize, 0.0f);
     inputFifo[1].resize (fftSize, 0.0f);
@@ -144,6 +144,9 @@ void OtokirisAudioProcessor::prepareToPlay (double sampleRate, int)
 
     updateBinMapping (sr);
     resetSTFTBuffers();
+
+    smoothedOutputGain.reset (sr, 0.02);
+    smoothedOutputGain.setCurrentAndTargetValue (1.0f);
 
     haveHostPosition = false;
     hostPlaying.store (false);
@@ -174,17 +177,16 @@ inline float fastHypot (float r, float i) noexcept
     return std::sqrt (r * r + i * i + 1e-12f);
 }
 
-// Smooth Hermite roll-off curve with continuous zero derivatives at both ends.
-// Eliminates spectral splattering, comb-filter ringing, and harsh musical noise.
+// Smooth Hermite roll-off curve starting at rectangle boundary.
+// Guarantees 1.0 everywhere inside the selected range and at center, with no edge clipping.
 inline float smoothMask (float dist, float halfSpan, float softness) noexcept
 {
-    const float inner = halfSpan - softness * 0.5f;
-    if (dist <= inner)
+    if (dist <= halfSpan)
         return 1.0f;
-    const float outer = halfSpan + softness * 0.5f;
-    if (dist >= outer)
+    const float s = juce::jmax (0.001f, softness);
+    if (dist >= halfSpan + s)
         return 0.0f;
-    const float t = (outer - dist) / softness;
+    const float t = (halfSpan + s - dist) / s;
     return t * t * (3.0f - 2.0f * t);
 }
 }
@@ -290,19 +292,26 @@ void OtokirisAudioProcessor::processSTFTFrame()
         // STFT Spectral Mask calculation with smooth Hermite roll-off
         const float logPos = bInfo.logPos;
         const float freqDist = std::abs (logPos - freqCentre);
-        const float freqMask = smoothMask (freqDist, freqWidth * 0.5f, maskSoftness);
+        // When freqWidth >= 0.98, full spectrum pass (avoids edge attenuation at max width)
+        const float freqMask = (freqWidth >= 0.98f) ? 1.0f
+                                                     : smoothMask (freqDist, freqWidth * 0.5f, maskSoftness);
 
         // Pan mask: pan is in [-1, +1] (total span = 2.0), so normalized width [0..1] represents half-span [0..1]
         const float panDist = std::abs (pan - panCentre);
         const float panHalfSpan = panWidth * 1.0f;
-        const float panMask = smoothMask (panDist, panHalfSpan, maskSoftness);
+        // When panWidth >= 0.98, full pan pass (avoids edge attenuation at max width)
+        const float panMask = (panWidth >= 0.98f) ? 1.0f
+                                                   : smoothMask (panDist, panHalfSpan, maskSoftness);
 
-        // Depth mask: when depthWidth >= 0.95, pass full depth to prevent comb filtering on direct/center sounds
+        // Depth mask: smooth blend from full-pass to active mask as depthWidth decreases from 1.0 to 0.90
+        // This avoids the hard switch artefact at the bypass threshold.
         float depthMask = 1.0f;
-        if (depthWidth < 0.95f)
         {
             const float depthDist = std::abs (depth - depthCentre);
-            depthMask = smoothMask (depthDist, depthWidth * 0.5f, maskSoftness);
+            const float activeMask = smoothMask (depthDist, depthWidth * 0.5f, maskSoftness);
+            // Crossfade: fully bypassed at depthWidth >= 1.0, fully active at depthWidth <= 0.90
+            const float blend = juce::jlimit (0.0f, 1.0f, (1.0f - depthWidth) / 0.10f);
+            depthMask = 1.0f + blend * (activeMask - 1.0f);
         }
 
         // Reverb reduction suppresses high-depth (ambient/diffuse) components
@@ -424,6 +433,7 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     const auto* gainParam = parameters.getRawParameterValue ("outputVolume");
     const float outputGain = gainParam != nullptr ? gainParam->load() : 1.0f;
+    smoothedOutputGain.setTargetValue (outputGain);
 
     for (int s = 0; s < numSamples; ++s)
     {
@@ -438,9 +448,10 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             processSTFTFrame();
         }
 
-        // Pull processed sample from output overlap-add buffer
-        const float outL = outputOlaBuffer[0][(size_t) olaReadPos] * outputGain;
-        const float outR = outputOlaBuffer[1][(size_t) olaReadPos] * outputGain;
+        // Pull processed sample from output overlap-add buffer (sample-accurate gain smoothing)
+        const float gain = smoothedOutputGain.getNextValue();
+        const float outL = outputOlaBuffer[0][(size_t) olaReadPos] * gain;
+        const float outR = outputOlaBuffer[1][(size_t) olaReadPos] * gain;
 
         outputOlaBuffer[0][(size_t) olaReadPos] = 0.0f;
         outputOlaBuffer[1][(size_t) olaReadPos] = 0.0f;

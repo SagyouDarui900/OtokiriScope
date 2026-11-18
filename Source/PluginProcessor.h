@@ -97,6 +97,7 @@ private:
     std::vector<BinInfo> binMap;
     std::vector<float> smoothedMaskGain;
     std::vector<float> rawMask;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> smoothedOutputGain;
 
     std::atomic<double> analysisSampleRate { 44100.0 };
     std::atomic<bool> hostPlaying { false };

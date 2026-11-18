@@ -111,7 +111,7 @@
 
 ```powershell
 # 1. リポジトリのクローン
-git clone https://github.com/your-username/OtokiriScope.git
+git clone https://github.com/SagyouDarui900/OtokiriScope.git
 cd OtokiriScope
 
 # 2. CMake 構成 (JUCE 8.0.10 は自動フェッチされます)
