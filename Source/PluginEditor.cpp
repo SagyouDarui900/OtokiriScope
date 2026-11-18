@@ -139,10 +139,19 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     graphics.setColour (background);
     graphics.fillRect (0, 0, (int) designWidth, (int) designHeight);
 
-    // Header titles
-    graphics.setColour (juce::Colour (0xbbffffff));
-    graphics.setFont (13.0f);
-    graphics.drawText ("OtokiriScope", 20, 10, 200, 18, juce::Justification::left);
+    // Header titles / logo
+    const auto logoImage = juce::ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
+    if (! logoImage.isNull())
+    {
+        graphics.drawImageWithin (logoImage, 20, 8, 180, 22,
+                                  juce::RectanglePlacement (juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid));
+    }
+    else
+    {
+        graphics.setColour (juce::Colour (0xbbffffff));
+        graphics.setFont (14.0f);
+        graphics.drawText ("OtokiriScope", 20, 10, 200, 18, juce::Justification::left);
+    }
 
     graphics.setColour (lightText);
     graphics.setFont (17.0f);
@@ -164,7 +173,10 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     const auto freqCentre = freqCentreParam != nullptr ? freqCentreParam->load() : 0.5f;
     const auto freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 0.67f;
     const auto depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
-    const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 0.47f;
+    const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 1.0f;
+
+    const auto* invertParam = processor.parameters.getRawParameterValue ("invertArea");
+    const bool invert = invertParam != nullptr && invertParam->load() > 0.5f;
 
     const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
     const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
@@ -216,10 +228,40 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
                                     (int) (w * area.getWidth()),
                                     (int) (fw * area.getHeight()));
 
-        graphics.setColour (areaFill.withAlpha (0.35f));
-        graphics.fillRect (selRect);
-        graphics.setColour (areaColour);
-        graphics.drawRect (selRect, 2);
+        if (invert)
+        {
+            // Inverted (Cut/Mute) mode: bright red border and reddish overlay indicating suppressed region
+            const auto cutFill = juce::Colour (0x55ff2222);
+            const auto cutBorder = juce::Colour (0xffff3333);
+            graphics.setColour (cutFill);
+            graphics.fillRect (selRect);
+            graphics.setColour (cutBorder);
+            graphics.drawRect (selRect, 2);
+
+            // Draw "消去" badge at top-left of selection rectangle if there's enough space
+            if (selRect.getWidth() >= 36 && selRect.getHeight() >= 16)
+            {
+                const auto badgeRect = juce::Rectangle<int> (selRect.getX() + 2, selRect.getY() + 2, 38, 15);
+                graphics.setColour (cutBorder);
+                graphics.fillRect (badgeRect);
+                graphics.setColour (juce::Colours::white);
+                graphics.setFont (11.0f);
+                graphics.drawText (text (u8"消去"), badgeRect, juce::Justification::centred);
+            }
+
+            // Top-right indicator inside scope screen
+            graphics.setColour (juce::Colour (0xeeff3333));
+            graphics.setFont (12.0f);
+            graphics.drawText (text (u8"【反転: 枠内消去】"), area.getRight() - 130, area.getY() + 4, 125, 16,
+                               juce::Justification::right);
+        }
+        else
+        {
+            graphics.setColour (areaFill.withAlpha (0.35f));
+            graphics.fillRect (selRect);
+            graphics.setColour (areaColour);
+            graphics.drawRect (selRect, 2);
+        }
 
         // Frequency labels inside screen
         graphics.setColour (juce::Colours::white);
@@ -300,7 +342,8 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         return "R " + juce::String (p, 2);
     };
 
-    graphics.setColour (lightText);
+    const auto modePrefix = invert ? text (u8"【反転】 ") : juce::String();
+    graphics.setColour (invert ? juce::Colour (0xffff6666) : lightText);
     graphics.setFont (12.0f);
     const auto freqStatus = text (u8"周波数: ") + formatHz (lowHz) + " - " + formatHz (highHz)
                           + " (" + juce::String (freqWidth * 100.0f, 0) + "%)";
@@ -309,7 +352,8 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     const auto depthStatus = text (u8"奥行: ") + juce::String (depthCentre * 100.0f, 0) + "% ("
                            + text (u8"幅 ") + juce::String (depthWidth * 100.0f, 0) + "%)";
 
-    graphics.drawText (freqStatus + "    |    " + panStatus, 20, 424, 560, 16, juce::Justification::left);
+    graphics.drawText (modePrefix + freqStatus + "    |    " + panStatus, 20, 424, 560, 16, juce::Justification::left);
+    graphics.setColour (lightText);
     graphics.drawText (depthStatus, 615, 424, 196, 16, juce::Justification::left);
 
     // Button drawing helper
@@ -688,13 +732,29 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
     // Checkboxes (y = 476, 500, 524, 548)
     else if (juce::Rectangle<float> (706, 476, 140, 18).contains (point))
+    {
         toggleParameter ("positionLock");
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (706, 500, 140, 18).contains (point))
+    {
         toggleParameter ("frequencyLock");
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (706, 524, 140, 18).contains (point))
+    {
         toggleParameter ("invertArea");
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (706, 548, 140, 18).contains (point))
+    {
         toggleParameter ("noVisual");
+        repaint();
+        return;
+    }
 
     // A/B switch button
     else if (juce::Rectangle<float> (280, 572, 75, 28).contains (point))

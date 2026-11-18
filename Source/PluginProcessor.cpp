@@ -386,7 +386,6 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (numSamples <= 0)
         return;
 
-    bool isPlaying = isNonRealtime();
     if (auto* hostPlayHead = getPlayHead())
     {
         if (auto position = hostPlayHead->getPosition())
@@ -406,7 +405,6 @@ void OtokirisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
             lastHostSample = currentSample + numSamples;
             haveHostPosition = true;
-            isPlaying = playing;
 
             if (auto seconds = position->getTimeInSeconds())
                 hostTimeSeconds.store (*seconds, std::memory_order_relaxed);
