@@ -36,7 +36,7 @@ private:
     float savedFreqCentre = 0.5f;
     float savedFreqWidth = 0.67f;
     float savedDepthCentre = 0.5f;
-    float savedDepthWidth = 0.47f;
+    float savedDepthWidth = 1.0f;
     juce::Point<float> dragStart;
     juce::Rectangle<float> dragAreaAtStart;
     int activeScope = 0;

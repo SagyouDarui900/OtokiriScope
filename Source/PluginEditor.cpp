@@ -117,7 +117,13 @@ void OtokirisAudioProcessorEditor::updateHeatmapImages()
 void OtokirisAudioProcessorEditor::timerCallback()
 {
     updateHeatmapImages();
-    repaint();
+
+    const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
+    const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
+    if (! noVisual)
+        repaint();
+    else
+        repaint (0, 460, 825, 152); // repaint only control area, skip heatmap
 }
 
 void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
@@ -133,10 +139,19 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     graphics.setColour (background);
     graphics.fillRect (0, 0, (int) designWidth, (int) designHeight);
 
-    // Header titles
-    graphics.setColour (juce::Colour (0xbbffffff));
-    graphics.setFont (13.0f);
-    graphics.drawText ("OtokiriScope", 20, 10, 200, 18, juce::Justification::left);
+    // Header titles / logo
+    const auto logoImage = juce::ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
+    if (! logoImage.isNull())
+    {
+        graphics.drawImageWithin (logoImage, 20, 8, 180, 22,
+                                  juce::RectanglePlacement (juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid));
+    }
+    else
+    {
+        graphics.setColour (juce::Colour (0xbbffffff));
+        graphics.setFont (14.0f);
+        graphics.drawText ("OtokiriScope", 20, 10, 200, 18, juce::Justification::left);
+    }
 
     graphics.setColour (lightText);
     graphics.setFont (17.0f);
@@ -158,7 +173,10 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     const auto freqCentre = freqCentreParam != nullptr ? freqCentreParam->load() : 0.5f;
     const auto freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 0.67f;
     const auto depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
-    const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 0.47f;
+    const auto depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 1.0f;
+
+    const auto* invertParam = processor.parameters.getRawParameterValue ("invertArea");
+    const bool invert = invertParam != nullptr && invertParam->load() > 0.5f;
 
     const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
     const bool noVisual = noVisualParam != nullptr && noVisualParam->load() > 0.5f;
@@ -210,10 +228,40 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
                                     (int) (w * area.getWidth()),
                                     (int) (fw * area.getHeight()));
 
-        graphics.setColour (areaFill.withAlpha (0.35f));
-        graphics.fillRect (selRect);
-        graphics.setColour (areaColour);
-        graphics.drawRect (selRect, 2);
+        if (invert)
+        {
+            // Inverted (Cut/Mute) mode: bright red border and reddish overlay indicating suppressed region
+            const auto cutFill = juce::Colour (0x55ff2222);
+            const auto cutBorder = juce::Colour (0xffff3333);
+            graphics.setColour (cutFill);
+            graphics.fillRect (selRect);
+            graphics.setColour (cutBorder);
+            graphics.drawRect (selRect, 2);
+
+            // Draw "消去" badge at top-left of selection rectangle if there's enough space
+            if (selRect.getWidth() >= 36 && selRect.getHeight() >= 16)
+            {
+                const auto badgeRect = juce::Rectangle<int> (selRect.getX() + 2, selRect.getY() + 2, 38, 15);
+                graphics.setColour (cutBorder);
+                graphics.fillRect (badgeRect);
+                graphics.setColour (juce::Colours::white);
+                graphics.setFont (11.0f);
+                graphics.drawText (text (u8"消去"), badgeRect, juce::Justification::centred);
+            }
+
+            // Top-right indicator inside scope screen
+            graphics.setColour (juce::Colour (0xeeff3333));
+            graphics.setFont (12.0f);
+            graphics.drawText (text (u8"【反転: 枠内消去】"), area.getRight() - 130, area.getY() + 4, 125, 16,
+                               juce::Justification::right);
+        }
+        else
+        {
+            graphics.setColour (areaFill.withAlpha (0.35f));
+            graphics.fillRect (selRect);
+            graphics.setColour (areaColour);
+            graphics.drawRect (selRect, 2);
+        }
 
         // Frequency labels inside screen
         graphics.setColour (juce::Colours::white);
@@ -294,7 +342,8 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         return "R " + juce::String (p, 2);
     };
 
-    graphics.setColour (lightText);
+    const auto modePrefix = invert ? text (u8"【反転】 ") : juce::String();
+    graphics.setColour (invert ? juce::Colour (0xffff6666) : lightText);
     graphics.setFont (12.0f);
     const auto freqStatus = text (u8"周波数: ") + formatHz (lowHz) + " - " + formatHz (highHz)
                           + " (" + juce::String (freqWidth * 100.0f, 0) + "%)";
@@ -303,7 +352,8 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     const auto depthStatus = text (u8"奥行: ") + juce::String (depthCentre * 100.0f, 0) + "% ("
                            + text (u8"幅 ") + juce::String (depthWidth * 100.0f, 0) + "%)";
 
-    graphics.drawText (freqStatus + "    |    " + panStatus, 20, 424, 560, 16, juce::Justification::left);
+    graphics.drawText (modePrefix + freqStatus + "    |    " + panStatus, 20, 424, 560, 16, juce::Justification::left);
+    graphics.setColour (lightText);
     graphics.drawText (depthStatus, 615, 424, 196, 16, juce::Justification::left);
 
     // Button drawing helper
@@ -314,6 +364,16 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         graphics.setColour (juce::Colour (0xff888888));
         graphics.drawRect (bounds, 1);
         graphics.setColour (lightText);
+        graphics.setFont (13.0f);
+        graphics.drawText (btnText, bounds, juce::Justification::centred);
+    };
+    const auto drawButtonDisabled = [&graphics] (juce::Rectangle<int> bounds, const juce::String& btnText)
+    {
+        graphics.setColour (juce::Colour (0xff383838));
+        graphics.fillRect (bounds);
+        graphics.setColour (juce::Colour (0xff555555));
+        graphics.drawRect (bounds, 1);
+        graphics.setColour (mutedText);
         graphics.setFont (13.0f);
         graphics.drawText (btnText, bounds, juce::Justification::centred);
     };
@@ -341,7 +401,7 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         graphics.fillRect (130, y - 3, 135, 6);
         const auto* id = y == 486 ? "extractionAmount" : (y == 518 ? "maskSoftness" : "reverbReduction");
         const auto* value = processor.parameters.getRawParameterValue (id);
-        const auto knobX = 130 + (int) std::round ((value != nullptr ? value->load() : 0.0f) * 127.0f);
+        const auto knobX = 130 + (int) std::round ((value != nullptr ? value->load() : 0.0f) * 135.0f);
         graphics.setColour (juce::Colour (0xffe0e0e0));
         graphics.fillRect (knobX - 4, y - 8, 8, 16);
     }
@@ -353,7 +413,7 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
         graphics.fillRect (540, y - 3, 135, 6);
         const auto* id = y == 486 ? "outputVolume" : (y == 518 ? "positionScale" : "colourScale");
         const auto* value = processor.parameters.getRawParameterValue (id);
-        const auto knobX = 540 + (int) std::round ((value != nullptr ? value->load() : 0.5f) * 127.0f);
+        const auto knobX = 540 + (int) std::round ((value != nullptr ? value->load() : 0.5f) * 135.0f);
         graphics.setColour (juce::Colour (0xffe0e0e0));
         graphics.fillRect (knobX - 4, y - 8, 8, 16);
     }
@@ -377,8 +437,9 @@ void OtokirisAudioProcessorEditor::paint (juce::Graphics& graphics)
     }
 
     // Bottom transport bar (y = 572, height = 28)
-    drawButton ({ 94, 572, 73, 28 }, text (u8"先頭へ"));
-    drawButton ({ 180, 572, 87, 28 }, text (u8"再生 / 停止"));
+    // "Return to start" / "Play/Stop" buttons are display-only; host transport cannot be controlled from plugin UI.
+    drawButtonDisabled ({ 94, 572, 73, 28 }, text (u8"先頭へ"));
+    drawButtonDisabled ({ 180, 572, 87, 28 }, text (u8"再生 / 停止"));
     drawButton ({ 280, 572, 75, 28 }, isSlotB ? text (u8"Slot B") : text (u8"Slot A"), isSlotB);
     drawButton ({ 368, 572, 95, 28 }, text (u8"プリセット ▼"));
 
@@ -671,13 +732,29 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
     // Checkboxes (y = 476, 500, 524, 548)
     else if (juce::Rectangle<float> (706, 476, 140, 18).contains (point))
+    {
         toggleParameter ("positionLock");
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (706, 500, 140, 18).contains (point))
+    {
         toggleParameter ("frequencyLock");
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (706, 524, 140, 18).contains (point))
+    {
         toggleParameter ("invertArea");
+        repaint();
+        return;
+    }
     else if (juce::Rectangle<float> (706, 548, 140, 18).contains (point))
+    {
         toggleParameter ("noVisual");
+        repaint();
+        return;
+    }
 
     // A/B switch button
     else if (juce::Rectangle<float> (280, 572, 75, 28).contains (point))
@@ -754,9 +831,10 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         menu.addItem (8, text (u8"8. 超高音 / エアー感 (3.5kHz-Nyquist)"));
         menu.addSeparator();
         menu.addItem (9, text (u8"9. 全体リセット (All-Pass)"));
-        menu.showMenuAsync (juce::PopupMenu::Options(), [this] (int result) {
-            if (result > 0)
-                applyPreset (result);
+        juce::Component::SafePointer<OtokirisAudioProcessorEditor> safeThis (this);
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safeThis] (int result) {
+            if (safeThis != nullptr && result > 0)
+                safeThis->applyPreset (result);
         });
         return;
     }
@@ -787,6 +865,8 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
                       : activeControl == 3 ? "colourScale"
                       : activeControl == 4 ? "extractionAmount"
                       : activeControl == 5 ? "maskSoftness" : "reverbReduction";
+        if (auto* param = processor.parameters.getParameter (id))
+            param->beginChangeGesture();
         setParameter (id, value);
         repaint();
         return;
@@ -840,6 +920,16 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
                         (current.getY() - scope.getY()) / scope.getHeight(),
                         current.getWidth() / scope.getWidth(),
                         current.getHeight() / scope.getHeight() };
+
+    // Begin automation gesture for all parameters modified by scope dragging
+    if (draggingPosition)
+    {
+        const auto centreId = activeScope == 1 ? "positionCentre" : "depthCentre";
+        const auto widthId  = activeScope == 1 ? "positionWidth"  : "depthWidth";
+        for (const char* id : { centreId, widthId, "frequencyCentre", "frequencyWidth" })
+            if (auto* p = processor.parameters.getParameter (id))
+                p->beginChangeGesture();
+    }
 }
 
 void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
@@ -893,18 +983,14 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
     area = area.constrainedWithin (juce::Rectangle<float> (0.0f, 0.0f, 1.0f, 1.0f));
 
     // Magnetic edge snapping for easy boundary / Nyquist selection
+    // Note: snap top edge without changing height (move top edge only, don't resize)
     if (area.getY() < 0.02f)
-    {
-        area.setHeight (area.getHeight() + area.getY());
         area.setY (0.0f);
-    }
     if (area.getBottom() > 0.98f)
         area.setBottom (1.0f);
+    // Snap left edge without changing width
     if (area.getX() < 0.02f)
-    {
-        area.setWidth (area.getWidth() + area.getX());
         area.setX (0.0f);
-    }
     if (area.getRight() > 0.98f)
         area.setRight (1.0f);
 
@@ -935,6 +1021,28 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
 
 void OtokirisAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
 {
+    // End automation gesture for scope drag parameters
+    if (draggingPosition && activeScope != 0)
+    {
+        const auto centreId = activeScope == 1 ? "positionCentre" : "depthCentre";
+        const auto widthId  = activeScope == 1 ? "positionWidth"  : "depthWidth";
+        for (const char* id : { centreId, widthId, "frequencyCentre", "frequencyWidth" })
+            if (auto* p = processor.parameters.getParameter (id))
+                p->endChangeGesture();
+    }
+
+    // End automation gesture for slider control
+    if (activeControl != 0)
+    {
+        const auto* id = activeControl == 1 ? "outputVolume"
+                      : activeControl == 2 ? "positionScale"
+                      : activeControl == 3 ? "colourScale"
+                      : activeControl == 4 ? "extractionAmount"
+                      : activeControl == 5 ? "maskSoftness" : "reverbReduction";
+        if (auto* p = processor.parameters.getParameter (id))
+            p->endChangeGesture();
+    }
+
     draggingPosition = false;
     dragEdges = 0;
     activeScope = 0;

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(OtokiriScope VERSION 1.0.0 LANGUAGES CXX)
+project(OtokiriScope VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +31,11 @@ juce_add_plugin(OtokiriScope
     PRODUCT_NAME "OtokiriScope"
 )
 
+juce_add_binary_data(OtokiriScopeResources
+    SOURCES
+        Resources/logo.png
+)
+
 juce_generate_juce_header(OtokiriScope)
 
 target_sources(OtokiriScope PRIVATE
@@ -53,6 +58,7 @@ endif()
 
 target_link_libraries(OtokiriScope
     PRIVATE
+        OtokiriScopeResources
         juce::juce_audio_utils
         juce::juce_gui_extra
         juce::juce_dsp
