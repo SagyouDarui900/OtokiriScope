@@ -70,6 +70,8 @@ private:
     static constexpr int olaBufferSize = fftSize * 4;
 
     juce::dsp::FFT fft { fftOrder };
+    // Third argument is 'bool normalise' in JUCE 8 WindowingFunction constructor.
+    // false = peak-normalised to 1.0 (unnormalised power), consistent with 2/3 OLA scaling.
     juce::dsp::WindowingFunction<float> window { fftSize,
         juce::dsp::WindowingFunction<float>::hann, false };
 
@@ -83,8 +85,10 @@ private:
     int olaReadPos = 0;
     int samplesSinceLastHop = 0;
 
-    std::array<HeatmapGrid, 2> heatmapGrids;
-    std::atomic<int> activeGridIndex { 0 };
+    // Triple buffer for lock-free, race-free heatmap data sharing between audio and UI threads
+    std::array<HeatmapGrid, 3> heatmapGrids;
+    std::atomic<int> readyGridIndex { 0 };
+    mutable std::atomic<int> uiReadingIndex { -1 };
     HeatmapGrid currentAccumulator;
     std::array<std::atomic<float>, numBands> spectrumLevel {};
 

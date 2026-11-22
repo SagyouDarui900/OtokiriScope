@@ -27,21 +27,25 @@ private:
     std::array<float, OtokirisAudioProcessor::numBands * OtokirisAudioProcessor::numSlots> rawDepthData {};
 
     bool draggingPosition = false;
-    juce::Rectangle<float> positionArea { 0.25f, 0.18f, 0.55f, 0.67f };
-    juce::Rectangle<float> depthArea { 0.0f, 0.18f, 1.0f, 0.67f };
-    juce::Rectangle<float> savedPositionArea;
-    juce::Rectangle<float> savedDepthArea;
+    bool hasSavedPosition = false;
     float savedPositionCentre = 0.0f;
     float savedPositionWidth = 0.55f;
-    float savedFreqCentre = 0.5f;
-    float savedFreqWidth = 0.67f;
+    float savedPositionFreqCentre = 0.5f;
+    float savedPositionFreqWidth = 0.67f;
+
+    bool hasSavedDepth = false;
     float savedDepthCentre = 0.5f;
     float savedDepthWidth = 1.0f;
+    float savedDepthFreqCentre = 0.5f;
+    float savedDepthFreqWidth = 0.67f;
+
     juce::Point<float> dragStart;
     juce::Rectangle<float> dragAreaAtStart;
     int activeScope = 0;
     int dragEdges = 0;
     int activeControl = 0;
+
+    juce::Rectangle<float> getScopeNormalizedRect (int scopeIndex) const;
 
     // A/B snapshot
     struct StateSnapshot

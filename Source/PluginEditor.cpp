@@ -80,6 +80,34 @@ OtokirisAudioProcessorEditor::~OtokirisAudioProcessorEditor()
     stopTimer();
 }
 
+juce::Rectangle<float> OtokirisAudioProcessorEditor::getScopeNormalizedRect (int scopeIndex) const
+{
+    const auto* freqCParam = processor.parameters.getRawParameterValue ("frequencyCentre");
+    const auto* freqWParam = processor.parameters.getRawParameterValue ("frequencyWidth");
+    const float fc = freqCParam != nullptr ? freqCParam->load() : 0.5f;
+    const float fw = freqWParam != nullptr ? freqWParam->load() : 0.67f;
+    const float y = 1.0f - fc - fw * 0.5f;
+
+    if (scopeIndex == 1) // Position scope
+    {
+        const auto* cParam = processor.parameters.getRawParameterValue ("positionCentre");
+        const auto* wParam = processor.parameters.getRawParameterValue ("positionWidth");
+        const float c = cParam != nullptr ? cParam->load() : 0.0f;
+        const float w = wParam != nullptr ? wParam->load() : 0.55f;
+        const float x = 0.5f + c * 0.5f - w * 0.5f;
+        return { x, y, w, fw };
+    }
+    else // Depth scope
+    {
+        const auto* cParam = processor.parameters.getRawParameterValue ("depthCentre");
+        const auto* wParam = processor.parameters.getRawParameterValue ("depthWidth");
+        const float c = cParam != nullptr ? cParam->load() : 0.5f;
+        const float w = wParam != nullptr ? wParam->load() : 1.0f;
+        const float x = c - w * 0.5f;
+        return { x, y, w, fw };
+    }
+}
+
 void OtokirisAudioProcessorEditor::updateHeatmapImages()
 {
     const auto* noVisualParam = processor.parameters.getRawParameterValue ("noVisual");
@@ -583,8 +611,6 @@ void OtokirisAudioProcessorEditor::applyPreset (int presetId)
             setParam ("depthWidth", 1.0f);
             if (auto* p = processor.parameters.getParameter ("invertArea"))
                 p->setValueNotifyingHost (0.0f);
-            positionArea = { 0.0f, 0.0f, 1.0f, high - low };
-            depthArea = { 0.0f, 0.0f, 1.0f, high - low };
             break;
         }
         case 8: // Ultra High / Air (3.5kHz - Nyquist)
@@ -599,8 +625,6 @@ void OtokirisAudioProcessorEditor::applyPreset (int presetId)
             setParam ("depthWidth", 1.0f);
             if (auto* p = processor.parameters.getParameter ("invertArea"))
                 p->setValueNotifyingHost (0.0f);
-            positionArea = { 0.0f, 0.0f, 1.0f, high - low };
-            depthArea = { 0.0f, 0.0f, 1.0f, high - low };
             break;
         }
         case 9: // Reset All (Full spectrum & full pan)
@@ -613,8 +637,6 @@ void OtokirisAudioProcessorEditor::applyPreset (int presetId)
             setParam ("depthWidth", 1.0f);
             if (auto* p = processor.parameters.getParameter ("invertArea"))
                 p->setValueNotifyingHost (0.0f);
-            positionArea = { 0.0f, 0.0f, 1.0f, 1.0f };
-            depthArea = { 0.0f, 0.0f, 1.0f, 1.0f };
             break;
         }
         default:
@@ -655,8 +677,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         {
             setParameter ("positionCentre", savedPositionCentre);
             setParameter ("positionWidth", savedPositionWidth);
-            positionArea.setX (0.5f + savedPositionCentre * 0.5f - savedPositionWidth * 0.5f);
-            positionArea.setWidth (savedPositionWidth);
         }
         else
         {
@@ -664,8 +684,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
             savedPositionWidth = currentW;
             setParameter ("positionCentre", 0.0f);
             setParameter ("positionWidth", 1.0f);
-            positionArea.setX (0.0f);
-            positionArea.setWidth (1.0f);
         }
         repaint();
         return;
@@ -673,8 +691,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
     else if (juce::Rectangle<float> (257, 445, 86, 22).contains (point))
     {
         setParameter ("positionCentre", 0.0f);
-        const float currentW = getParamVal ("positionWidth");
-        positionArea.setX (0.5f - currentW * 0.5f);
         repaint();
         return;
     }
@@ -684,24 +700,15 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         const float currentC = getParamVal ("frequencyCentre");
         if (currentW >= 0.98f)
         {
-            setParameter ("frequencyCentre", savedFreqCentre);
-            setParameter ("frequencyWidth", savedFreqWidth);
-            const float y = 1.0f - savedFreqCentre - savedFreqWidth * 0.5f;
-            positionArea.setY (y);
-            positionArea.setHeight (savedFreqWidth);
-            depthArea.setY (y);
-            depthArea.setHeight (savedFreqWidth);
+            setParameter ("frequencyCentre", savedPositionFreqCentre);
+            setParameter ("frequencyWidth", savedPositionFreqWidth);
         }
         else
         {
-            savedFreqCentre = currentC;
-            savedFreqWidth = currentW;
+            savedPositionFreqCentre = currentC;
+            savedPositionFreqWidth = currentW;
             setParameter ("frequencyCentre", 0.5f);
             setParameter ("frequencyWidth", 1.0f);
-            positionArea.setY (0.0f);
-            positionArea.setHeight (1.0f);
-            depthArea.setY (0.0f);
-            depthArea.setHeight (1.0f);
         }
         repaint();
         return;
@@ -714,8 +721,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         {
             setParameter ("depthCentre", savedDepthCentre);
             setParameter ("depthWidth", savedDepthWidth);
-            depthArea.setX (savedDepthCentre - savedDepthWidth * 0.5f);
-            depthArea.setWidth (savedDepthWidth);
         }
         else
         {
@@ -723,8 +728,6 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
             savedDepthWidth = currentW;
             setParameter ("depthCentre", 0.5f);
             setParameter ("depthWidth", 1.0f);
-            depthArea.setX (0.0f);
-            depthArea.setWidth (1.0f);
         }
         repaint();
         return;
@@ -916,10 +919,7 @@ void OtokirisAudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 
     draggingPosition = current.expanded (margin, margin).contains (point);
     dragStart = point;
-    dragAreaAtStart = { (current.getX() - scope.getX()) / scope.getWidth(),
-                        (current.getY() - scope.getY()) / scope.getHeight(),
-                        current.getWidth() / scope.getWidth(),
-                        current.getHeight() / scope.getHeight() };
+    dragAreaAtStart = getScopeNormalizedRect (activeScope);
 
     // Begin automation gesture for all parameters modified by scope dragging
     if (draggingPosition)
@@ -973,31 +973,33 @@ void OtokirisAudioProcessorEditor::mouseDrag (const juce::MouseEvent& event)
     if (dragEdges == 0)
         area.setPosition (area.getX() + deltaX, area.getY() + deltaY);
 
-    if (auto* locked = processor.parameters.getRawParameterValue ("positionLock"))
-        if (locked->load() > 0.5f)
-            area.setX (dragAreaAtStart.getX());
-    if (auto* locked = processor.parameters.getRawParameterValue ("frequencyLock"))
-        if (locked->load() > 0.5f)
-            area.setY (dragAreaAtStart.getY());
+    const bool posLocked = processor.parameters.getRawParameterValue ("positionLock") != nullptr
+                        && processor.parameters.getRawParameterValue ("positionLock")->load() > 0.5f;
+    const bool freqLocked = processor.parameters.getRawParameterValue ("frequencyLock") != nullptr
+                         && processor.parameters.getRawParameterValue ("frequencyLock")->load() > 0.5f;
+
+    if (posLocked)
+        area.setX (dragAreaAtStart.getX());
+    if (freqLocked)
+        area.setY (dragAreaAtStart.getY());
 
     area = area.constrainedWithin (juce::Rectangle<float> (0.0f, 0.0f, 1.0f, 1.0f));
 
-    // Magnetic edge snapping for easy boundary / Nyquist selection
-    // Note: snap top edge without changing height (move top edge only, don't resize)
-    if (area.getY() < 0.02f)
-        area.setY (0.0f);
-    if (area.getBottom() > 0.98f)
-        area.setBottom (1.0f);
-    // Snap left edge without changing width
-    if (area.getX() < 0.02f)
-        area.setX (0.0f);
-    if (area.getRight() > 0.98f)
-        area.setRight (1.0f);
-
-    if (activeScope == 1)
-        positionArea = area;
-    else
-        depthArea = area;
+    // Magnetic edge snapping for easy boundary / Nyquist selection (skip snapped axis if locked)
+    if (! freqLocked)
+    {
+        if (area.getY() < 0.02f)
+            area.setY (0.0f);
+        if (area.getBottom() > 0.98f)
+            area.setBottom (1.0f);
+    }
+    if (! posLocked)
+    {
+        if (area.getX() < 0.02f)
+            area.setX (0.0f);
+        if (area.getRight() > 0.98f)
+            area.setRight (1.0f);
+    }
 
     const auto centre = activeScope == 1
         ? juce::jlimit (-1.0f, 1.0f, (area.getCentreX() - 0.5f) * 2.0f)
@@ -1060,11 +1062,28 @@ void OtokirisAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& eve
             parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
     };
 
+    const auto getParamVal = [this] (const char* id) -> float
+    {
+        if (auto* parameter = processor.parameters.getRawParameterValue (id))
+            return parameter->load();
+        return 0.0f;
+    };
+
     if (activeScope == 1)
     {
-        if (savedPositionArea.isEmpty())
+        const float curW = getParamVal ("positionWidth");
+        const float curC = getParamVal ("positionCentre");
+        const float curFW = getParamVal ("frequencyWidth");
+        const float curFC = getParamVal ("frequencyCentre");
+
+        if (! hasSavedPosition)
         {
-            savedPositionArea = positionArea;
+            savedPositionCentre = curC;
+            savedPositionWidth = curW;
+            savedPositionFreqCentre = curFC;
+            savedPositionFreqWidth = curFW;
+            hasSavedPosition = true;
+
             setParameter ("positionCentre", 0.0f);
             setParameter ("positionWidth", 1.0f);
             setParameter ("frequencyCentre", 0.5f);
@@ -1072,19 +1091,28 @@ void OtokirisAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& eve
         }
         else
         {
-            const auto centre = juce::jlimit (-1.0f, 1.0f, (savedPositionArea.getCentreX() - 0.5f) * 2.0f);
-            setParameter ("positionCentre", centre);
-            setParameter ("positionWidth", savedPositionArea.getWidth());
-            setParameter ("frequencyCentre", 1.0f - savedPositionArea.getCentreY());
-            setParameter ("frequencyWidth", savedPositionArea.getHeight());
-            savedPositionArea = {};
+            setParameter ("positionCentre", savedPositionCentre);
+            setParameter ("positionWidth", savedPositionWidth);
+            setParameter ("frequencyCentre", savedPositionFreqCentre);
+            setParameter ("frequencyWidth", savedPositionFreqWidth);
+            hasSavedPosition = false;
         }
     }
     else if (activeScope == 2)
     {
-        if (savedDepthArea.isEmpty())
+        const float curW = getParamVal ("depthWidth");
+        const float curC = getParamVal ("depthCentre");
+        const float curFW = getParamVal ("frequencyWidth");
+        const float curFC = getParamVal ("frequencyCentre");
+
+        if (! hasSavedDepth)
         {
-            savedDepthArea = depthArea;
+            savedDepthCentre = curC;
+            savedDepthWidth = curW;
+            savedDepthFreqCentre = curFC;
+            savedDepthFreqWidth = curFW;
+            hasSavedDepth = true;
+
             setParameter ("depthCentre", 0.5f);
             setParameter ("depthWidth", 1.0f);
             setParameter ("frequencyCentre", 0.5f);
@@ -1092,11 +1120,11 @@ void OtokirisAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& eve
         }
         else
         {
-            setParameter ("depthCentre", savedDepthArea.getCentreX());
-            setParameter ("depthWidth", savedDepthArea.getWidth());
-            setParameter ("frequencyCentre", 1.0f - savedDepthArea.getCentreY());
-            setParameter ("frequencyWidth", savedDepthArea.getHeight());
-            savedDepthArea = {};
+            setParameter ("depthCentre", savedDepthCentre);
+            setParameter ("depthWidth", savedDepthWidth);
+            setParameter ("frequencyCentre", savedDepthFreqCentre);
+            setParameter ("frequencyWidth", savedDepthFreqWidth);
+            hasSavedDepth = false;
         }
     }
 

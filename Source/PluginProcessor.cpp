@@ -22,9 +22,11 @@ OtokirisAudioProcessor::OtokirisAudioProcessor()
 void OtokirisAudioProcessor::getHeatmapData (std::array<float, numBands * numSlots>& outPan,
                                              std::array<float, numBands * numSlots>& outDepth) const noexcept
 {
-    const int idx = activeGridIndex.load (std::memory_order_acquire);
+    const int idx = readyGridIndex.load (std::memory_order_acquire);
+    uiReadingIndex.store (idx, std::memory_order_release);
     outPan = heatmapGrids[(size_t) idx].pan;
     outDepth = heatmapGrids[(size_t) idx].depth;
+    uiReadingIndex.store (-1, std::memory_order_release);
 }
 
 float OtokirisAudioProcessor::getSpectrumLevel (int index) const noexcept
@@ -189,6 +191,15 @@ inline float smoothMask (float dist, float halfSpan, float softness) noexcept
     const float t = (halfSpan + s - dist) / s;
     return t * t * (3.0f - 2.0f * t);
 }
+
+// Non-linear pan warp based on positionScale (0.5 is linear, >0.5 expands center resolution)
+inline float warpPan (float p, float exponent) noexcept
+{
+    if (std::abs (p) < 1e-6f || std::abs (exponent - 1.0f) < 1e-4f)
+        return p;
+    const float sign = p >= 0.0f ? 1.0f : -1.0f;
+    return sign * std::pow (std::abs (p), exponent);
+}
 }
 
 void OtokirisAudioProcessor::processSTFTFrame()
@@ -214,6 +225,7 @@ void OtokirisAudioProcessor::processSTFTFrame()
     const auto* freqWidthParam = parameters.getRawParameterValue ("frequencyWidth");
     const auto* panCentreParam = parameters.getRawParameterValue ("positionCentre");
     const auto* panWidthParam = parameters.getRawParameterValue ("positionWidth");
+    const auto* panScaleParam = parameters.getRawParameterValue ("positionScale");
     const auto* depthCentreParam = parameters.getRawParameterValue ("depthCentre");
     const auto* depthWidthParam = parameters.getRawParameterValue ("depthWidth");
     const auto* extAmountParam = parameters.getRawParameterValue ("extractionAmount");
@@ -225,6 +237,9 @@ void OtokirisAudioProcessor::processSTFTFrame()
     const float freqWidth = freqWidthParam != nullptr ? freqWidthParam->load() : 0.67f;
     const float panCentre = panCentreParam != nullptr ? panCentreParam->load() : 0.0f;
     const float panWidth = panWidthParam != nullptr ? panWidthParam->load() : 0.55f;
+    const float panScale = panScaleParam != nullptr ? panScaleParam->load() : 0.5f;
+    // panScale in [0, 1]. 0.5 is linear. >0.5 expands center resolution, <0.5 expands edge resolution
+    const float panExponent = std::pow (2.0f, (0.5f - panScale) * 2.5f);
     const float depthCentre = depthCentreParam != nullptr ? depthCentreParam->load() : 0.5f;
     const float depthWidth = depthWidthParam != nullptr ? depthWidthParam->load() : 1.0f;
     const float extAmount = extAmountParam != nullptr ? extAmountParam->load() : 1.0f;
@@ -259,7 +274,8 @@ void OtokirisAudioProcessor::processSTFTFrame()
         const float sumMag = magL + magR + 1e-6f;
 
         // Pan estimation: -1 (Left) to +1 (Right)
-        const float pan = (magR - magL) / sumMag;
+        const float rawPan = (magR - magL) / sumMag;
+        const float pan = warpPan (rawPan, panExponent);
 
         // Depth / Diffuseness estimation from Mid/Side components
         const float realMid = (realL + realR) * 0.5f;
@@ -352,9 +368,20 @@ void OtokirisAudioProcessor::processSTFTFrame()
         for (size_t b = 0; b < numBands; ++b)
             spectrumLevel[b].store (currentBandEnergy[b], std::memory_order_relaxed);
 
-        const int nextIdx = 1 - activeGridIndex.load (std::memory_order_relaxed);
+        // Triple-buffering: select a buffer that is neither currently ready nor being read by GUI
+        const int currentReady = readyGridIndex.load (std::memory_order_relaxed);
+        const int readingIdx = uiReadingIndex.load (std::memory_order_relaxed);
+        int nextIdx = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i != currentReady && i != readingIdx)
+            {
+                nextIdx = i;
+                break;
+            }
+        }
         heatmapGrids[(size_t) nextIdx] = currentAccumulator;
-        activeGridIndex.store (nextIdx, std::memory_order_release);
+        readyGridIndex.store (nextIdx, std::memory_order_release);
     }
 
     // Inverse STFT
